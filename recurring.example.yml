@@ -1,0 +1,22 @@
+# karamd recurring-task rules. Copy to the target vault (or point --config here)
+# and edit. Each entry materialises taskmd tasks when due.
+
+# Interval-from-completion: the next task appears ~18 days AFTER you finish the
+# previous one, not on a fixed calendar. Self-healing if a run is missed.
+- key: periodic-checkin
+  title: "Reach out to [[Someone]]"
+  trigger: after_completion
+  every_days: 18
+  phase: next
+  priority: medium
+  tags: [personal]
+
+# Fixed annual date: the task appears `lead_days` before the date, once per
+# year, so there is time to prepare (e.g. buy a present, write a message).
+- key: annual-birthday
+  title: "Birthday: present & congratulations"
+  trigger: calendar
+  annual: "07-20"
+  lead_days: 10
+  priority: high
+  tags: [personal]
