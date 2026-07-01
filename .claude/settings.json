@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "taskmd-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "driangle/taskmd"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "taskmd@taskmd-marketplace": true,
+    "taskmd-mcp@taskmd-marketplace": true
+  }
+}
