@@ -28,11 +28,13 @@ rather than blindly emitting on a schedule, so neither piles up duplicates.
 ## Usage
 
 ```
-karamd generate --vault /path/to/vault --config recurring.yml [--dry-run] [--today YYYY-MM-DD]
+karamd generate --vault /path/to/vault [--config FILE] [--dry-run] [--today YYYY-MM-DD]
 ```
 
-`--dry-run` reports what would be created without writing. `--today` overrides
-the date (for backfill or testing); it defaults to the system date.
+`--config` defaults to `<vault>/.taskmd.recurring.yaml`, so a rules file kept
+next to `.taskmd.yaml` needs no flag. `--dry-run` reports what would be created
+without writing. `--today` overrides the date (for backfill or testing); it
+defaults to the system date.
 
 See `recurring.example.yml` for the rule format.
 

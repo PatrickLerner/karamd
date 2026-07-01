@@ -22,6 +22,9 @@ pub mod due;
 pub mod rule;
 pub mod task;
 
+/// Rules file used when `--config` is omitted, resolved relative to `--vault`.
+pub const DEFAULT_CONFIG: &str = ".taskmd.recurring.yaml";
+
 use rule::{Rule, Trigger};
 use task::ExistingTask;
 
@@ -39,9 +42,10 @@ enum Commands {
         /// Path to the taskmd project root (the dir holding .taskmd.yaml).
         #[arg(long)]
         vault: PathBuf,
-        /// Path to the recurring-rules YAML file.
+        /// Path to the recurring-rules YAML file. Defaults to
+        /// `<vault>/.taskmd.recurring.yaml`.
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
         /// Print what would be created without writing files.
         #[arg(long)]
         dry_run: bool,
@@ -171,6 +175,7 @@ where
             today,
         } => {
             let today = today.unwrap_or_else(|| Local::now().date_naive());
+            let config = config.unwrap_or_else(|| vault.join(DEFAULT_CONFIG));
             let report = generate(&vault, &config, today, dry_run)?;
             if report.created.is_empty() {
                 println!("karamd: nothing due");
@@ -426,6 +431,22 @@ mod tests {
             vault.clone().into_os_string(),
             "--config".into(),
             config.into_os_string(),
+        ])
+        .unwrap();
+        assert_eq!(fs::read_dir(vault.join("tasks")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn run_defaults_config_to_taskmd_recurring_yaml() {
+        // Omitting --config resolves to <vault>/.taskmd.recurring.yaml.
+        let vault = tempdir();
+        fs::create_dir_all(vault.join("tasks")).unwrap();
+        fs::write(vault.join(DEFAULT_CONFIG), AFTER).unwrap();
+        run([
+            "karamd".into(),
+            "generate".into(),
+            "--vault".into(),
+            vault.clone().into_os_string(),
         ])
         .unwrap();
         assert_eq!(fs::read_dir(vault.join("tasks")).unwrap().count(), 1);

@@ -53,6 +53,9 @@ dropped ("prüfen" → "pr-fen"). Covered by a unit test — keep it green.
 
 ## Design decisions (settled)
 
+- **Default config path**: `--config` is optional; when omitted it resolves to
+  `<vault>/.taskmd.recurring.yaml` (const `DEFAULT_CONFIG`). Keeps the rules file
+  next to `.taskmd.yaml` so unattended runs need only `--vault`.
 - **Completion date source**: taskmd stamps `completed_at: YYYY-MM-DD` in
   frontmatter on `set --done`, and it *preserves* our custom `recurring:` field
   across edits. So the after_completion interval reads `completed_at` directly —

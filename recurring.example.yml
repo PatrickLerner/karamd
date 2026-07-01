@@ -1,5 +1,6 @@
-# karamd recurring-task rules. Copy to the target vault (or point --config here)
-# and edit. Each entry materialises taskmd tasks when due.
+# karamd recurring-task rules. Copy to <vault>/.taskmd.recurring.yaml (the
+# default --config location) and edit. Each entry materialises taskmd tasks
+# when due.
 
 # Interval-from-completion: the next task appears ~18 days AFTER you finish the
 # previous one, not on a fixed calendar. Self-healing if a run is missed.
