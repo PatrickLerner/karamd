@@ -4,6 +4,15 @@ All notable changes to karamd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-07-02
+
+### Added
+
+- Rules can carry an optional `body:` (markdown) for the generated task,
+  replacing the default `TODO` stub. Omit it to keep the stub. karamd always
+  writes the frontmatter, `# <title>` heading, and provenance comment; the body
+  is everything after that.
+
 ## [0.1.1] - 2026-07-01
 
 ### Added
@@ -20,5 +29,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   triggers, idempotent creation via a `recurring:` frontmatter marker, `--dry-run`
   and `--today` overrides, Nix flake, and CI.
 
+[0.1.2]: https://github.com/PatrickLerner/karamd/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/PatrickLerner/karamd/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/PatrickLerner/karamd/releases/tag/v0.1.0

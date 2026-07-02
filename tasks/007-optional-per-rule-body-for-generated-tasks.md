@@ -1,11 +1,12 @@
 ---
 title: "Optional per-rule body so generated tasks aren't TODO stubs"
 id: "007"
-status: pending
+status: completed
 priority: medium
 type: feature
 tags: ["work", "core"]
 created_at: "2026-07-01"
+completed_at: 2026-07-02
 ---
 
 # Optional per-rule body so generated tasks aren't TODO stubs

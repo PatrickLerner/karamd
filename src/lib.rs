@@ -506,6 +506,7 @@ mod tests {
             phase: None,
             priority: None,
             tags: vec![],
+            body: None,
         }
     }
 

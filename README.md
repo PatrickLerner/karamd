@@ -25,6 +25,11 @@ Two trigger kinds:
 These are genuinely different triggers. karamd reads task *state* each run
 rather than blindly emitting on a schedule, so neither piles up duplicates.
 
+A rule may carry an optional `body:` (markdown) that replaces the default
+`TODO` stub in the generated task. karamd always writes the frontmatter, the
+`# <title>` heading, and a provenance comment; the body is everything after
+that. Omit `body:` to keep the stub.
+
 ## Usage
 
 ```

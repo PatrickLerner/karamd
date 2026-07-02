@@ -21,3 +21,30 @@
   lead_days: 10
   priority: high
   tags: [personal]
+
+# Optional `body`: markdown for the generated task, replacing the default
+# `## Objective / ## Tasks / ## Acceptance Criteria` TODO stub. Omit it to keep
+# the stub. karamd still writes the frontmatter, the `# <title>` heading, and a
+# provenance comment; `body` is everything after that. Use a `|` block scalar.
+# Do not start a body with a `---` fence: it reads as a second frontmatter block
+# to taskmd/Obsidian (karamd's own dedup is unaffected, its marker is up top).
+- key: quarterly-backup
+  title: "Verify backups restore cleanly"
+  trigger: after_completion
+  every_days: 90
+  priority: high
+  tags: [ops]
+  body: |
+    ## Objective
+
+    Confirm the offsite backup actually restores, not just that it runs.
+
+    ## Tasks
+
+    - [ ] Pull the latest snapshot
+    - [ ] Restore to a scratch host
+    - [ ] Spot-check a known record
+
+    ## Acceptance Criteria
+
+    - A restored copy opens and the spot-checked record matches

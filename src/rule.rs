@@ -42,12 +42,24 @@ pub struct Rule {
     pub priority: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Optional markdown body for the generated task. When present it replaces
+    /// the default `TODO` stub (see [`crate::task::render_task`]); when absent
+    /// the stub is used so existing rules keep their output.
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 impl Rule {
     /// Reject rules missing the fields their trigger needs, so a typo in the
     /// rules file fails loudly instead of silently generating nothing.
     pub fn validate(&self) -> Result<()> {
+        // A body, if given, must carry text: an empty/whitespace-only body would
+        // emit a task with no content, worse than the fallback stub.
+        if let Some(body) = &self.body
+            && body.trim().is_empty()
+        {
+            bail!("rule `{}`: `body` must not be empty", self.key);
+        }
         match self.trigger {
             Trigger::AfterCompletion => {
                 if self.every_days.is_none() {
@@ -187,5 +199,35 @@ mod tests {
     #[test]
     fn validate_all_accepts_unique_valid_rules() {
         validate_all(&load_rules(SAMPLE).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn parses_optional_body() {
+        let raw = "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  body: |\n    ## Objective\n\n    Do the thing.\n";
+        let rules = load_rules(raw).unwrap();
+        assert_eq!(
+            rules[0].body.as_deref(),
+            Some("## Objective\n\nDo the thing.\n")
+        );
+    }
+
+    #[test]
+    fn body_defaults_to_none() {
+        assert!(load_rules(SAMPLE).unwrap()[0].body.is_none());
+    }
+
+    #[test]
+    fn validate_rejects_empty_body() {
+        let raw =
+            "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  body: \"   \"\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("body"));
+    }
+
+    #[test]
+    fn validate_accepts_non_empty_body() {
+        let raw =
+            "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  body: real\n";
+        load_rules(raw).unwrap()[0].validate().unwrap();
     }
 }
