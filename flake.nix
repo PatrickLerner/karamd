@@ -111,7 +111,7 @@
           dontFixup = true;
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
-          outputHash = final.lib.fakeHash;
+          outputHash = "sha256-r7+2GF7p8NsDqX+RNgWHapBVYMqn0D+/yx2DTd0/JVI=";
         };
 
         # The built SPA bundle (offline: deps come from karamd-web-deps).
