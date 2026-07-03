@@ -4,7 +4,7 @@ All notable changes to karamd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-03
 
 ### Added
 
@@ -36,6 +36,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wired over `GET /api/tasks/{id}/run` to a process spawned in a PTY (cwd = the
   vault), seeded with the task's context. Command is configurable via
   `--run-command` / `KARAMD_RUN_COMMAND` (default `claude`).
+- Persistent server-side sessions (one per task): a Claude run outlives its
+  socket, so closing the tab keeps it alive; reattaching replays scrollback and
+  reconnects to the live stream. Killed only explicitly (`DELETE
+  /api/sessions/{id}`, from the sidebar) or on server shutdown. `GET
+  /api/sessions` lists them.
+- `graph` (Graphviz DOT of the dependency graph) and `stats` (counts by
+  status/priority/phase, ready/blocked/invalid).
+
+### Changed
+
+- Web UI redesigned around a paper aesthetic and an aligned three-pane shell
+  (nav | list | detail, collapsing to a drawer + single pane on narrow
+  screens). Navigation is by phase view (Today / Next week / Later / Done) with
+  reload-safe nested URLs (`#/view/<tab>/task/<id>`), not by status filter.
 
 ## [0.1.2] - 2026-07-02
 
@@ -62,6 +76,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   triggers, idempotent creation via a `recurring:` frontmatter marker, `--dry-run`
   and `--today` overrides, Nix flake, and CI.
 
+[0.2.0]: https://github.com/PatrickLerner/karamd/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/PatrickLerner/karamd/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/PatrickLerner/karamd/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/PatrickLerner/karamd/releases/tag/v0.1.0
