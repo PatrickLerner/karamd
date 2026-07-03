@@ -3,7 +3,7 @@ import { ErrorBanner } from "../components/Banner";
 import { PriorityChip, StatusChip } from "../components/Chip";
 import { stripWikiLinks } from "../markdown";
 import { taskHref } from "../router";
-import { DONE_TAB, taskInTab } from "../tabs";
+import { DONE_TAB, tabSlug, taskInTab } from "../tabs";
 import type { InvalidTask, Phase, TaskSummary } from "../types";
 
 interface Group {
@@ -39,6 +39,7 @@ export function List({
   rankById,
   activeTab,
   tabName,
+  newLink,
   error,
   onDismissError,
 }: {
@@ -48,6 +49,7 @@ export function List({
   rankById: Map<string, number>;
   activeTab: string | null;
   tabName: string;
+  newLink: string;
   error: string | null;
   onDismissError: () => void;
 }) {
@@ -107,6 +109,9 @@ export function List({
       <div className="list-head">
         <h1>{tabName}</h1>
         {groups !== null && <span className="list-count">{total}</span>}
+        <a href={newLink} className="new-task">
+          + New
+        </a>
       </div>
       <div className="filter-bar">
         <input
@@ -124,7 +129,11 @@ export function List({
           {showHeadings && <h2>{g.name}</h2>}
           <div className="task-list">
             {g.tasks.map((t) => (
-              <TaskRow key={t.id} task={t} tab={activeTab ?? ""} />
+              <TaskRow
+                key={t.id}
+                task={t}
+                tab={activeTab ? tabSlug(activeTab) : ""}
+              />
             ))}
           </div>
         </section>

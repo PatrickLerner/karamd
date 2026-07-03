@@ -45,6 +45,19 @@ function transitions(status: Status, workflow: Workflow): Transition[] {
   }
 }
 
+// Task bodies conventionally start with `# <title>`; the detail view already
+// shows the title as its own heading, so drop the duplicate before rendering.
+function bodyWithoutTitle(body: string, title: string): string {
+  const text = body.replace(/\r\n/g, "\n").trimStart();
+  const nl = text.indexOf("\n");
+  const first = (nl === -1 ? text : text.slice(0, nl)).trim();
+  const heading = first.match(/^#\s+(.*)$/);
+  if (heading && stripWikiLinks(heading[1]).trim() === stripWikiLinks(title).trim()) {
+    return nl === -1 ? "" : text.slice(nl + 1);
+  }
+  return body;
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   if (children === null || children === undefined || children === "")
     return null;
@@ -163,10 +176,12 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
         <Field label="cancelled">{task.cancelled_at}</Field>
         <Field label="recurring">{task.recurring}</Field>
       </dl>
-      {task.body.trim() !== "" && (
+      {bodyWithoutTitle(task.body, task.title).trim() !== "" && (
         <div
           className="markdown"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(task.body) }}
+          dangerouslySetInnerHTML={{
+            __html: renderMarkdown(bodyWithoutTitle(task.body, task.title)),
+          }}
         />
       )}
     </div>

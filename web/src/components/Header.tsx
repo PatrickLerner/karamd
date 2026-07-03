@@ -1,15 +1,15 @@
 export function Header({
   date,
-  newLink,
   onToggleMenu,
 }: {
   date: string;
-  newLink: string;
   onToggleMenu: () => void;
 }) {
   return (
     <header className="app-header">
-      <div className="header-left">
+      {/* brand cell mirrors the sidebar column so the header sits on the same
+          grid as the body below it */}
+      <div className="header-brand">
         <button
           type="button"
           className="burger"
@@ -22,12 +22,7 @@ export function Header({
           karamd
         </a>
       </div>
-      <div className="header-right">
-        <span className="header-date">{date}</span>
-        <a href={newLink} className="header-action header-new">
-          + New
-        </a>
-      </div>
+      <span className="header-date">{date}</span>
     </header>
   );
 }

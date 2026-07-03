@@ -150,11 +150,7 @@ function App() {
 
   return (
     <>
-      <Header
-        date={date}
-        newLink={newHref(tabForLinks)}
-        onToggleMenu={() => setMenuOpen((o) => !o)}
-      />
+      <Header date={date} onToggleMenu={() => setMenuOpen((o) => !o)} />
       <div className="app-body">
         <Sidebar
           tabs={tabs}
@@ -188,6 +184,7 @@ function App() {
               rankById={rankById}
               activeTab={activeTab}
               tabName={tabName}
+              newLink={newHref(tabForLinks)}
               error={error}
               onDismissError={() => setError(null)}
             />

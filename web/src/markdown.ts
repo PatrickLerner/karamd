@@ -53,7 +53,9 @@ const LIST_ITEM = /^\s*(?:[-*]|\d+\.)\s+/;
 const BLOCK_START = /^(#{1,6}\s|```|\s*(?:[-*]|\d+\.)\s)/;
 
 export function renderMarkdown(src: string): string {
-  const lines = stripWikiLinks(src).replace(/\r\n/g, "\n").split("\n");
+  // HTML comments (e.g. karamd's provenance marker) are metadata, not content.
+  const cleaned = stripWikiLinks(src).replace(/<!--[\s\S]*?-->/g, "");
+  const lines = cleaned.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
   let i = 0;
   while (i < lines.length) {

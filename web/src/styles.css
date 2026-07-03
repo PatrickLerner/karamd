@@ -50,6 +50,8 @@
   --cyan: #2aa198;
   --green: #859900;
   --font: "iA Writer Quattro", ui-monospace, monospace;
+  /* editorial voice for titles and headings; body stays mono */
+  --serif: "Iowan Old Style", "Palatino", "Charter", "Georgia", serif;
 }
 
 * {
@@ -89,26 +91,24 @@ h3 {
   top: 0;
   z-index: 40;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-height: 3rem;
-  padding: 0 0.75rem;
+  align-items: stretch;
+  height: 3rem;
   background: var(--base3);
   border-bottom: 1px solid var(--base2);
 }
 
-.header-left,
-.header-right {
+.header-brand {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.25rem;
+  padding: 0 1rem;
 }
 
 .brand {
   color: var(--base01);
+  font-family: var(--serif);
   font-weight: 700;
-  padding: 0.625rem 0;
+  font-size: 1.05rem;
 }
 
 .burger {
@@ -124,20 +124,13 @@ h3 {
 }
 
 .header-date {
+  align-self: center;
+  margin-left: auto;
+  padding-right: 1rem;
   color: var(--base1);
   font-size: 0.85rem;
   white-space: nowrap;
-}
-
-.header-action {
-  padding: 0.5rem 0;
-}
-
-.header-new {
-  color: var(--base3);
-  background: var(--blue);
-  border-radius: 0.375rem;
-  padding: 0.4rem 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- app body / sidebar ---- */
@@ -162,8 +155,9 @@ h3 {
   width: 15rem;
   display: flex;
   flex-direction: column;
-  padding: 0.75rem 0.5rem;
-  background: var(--base2);
+  padding: 1.25rem 0.75rem;
+  /* same paper as the page, set apart by a hairline rather than a filled slab */
+  background: var(--base3);
   border-right: 1px solid var(--base2);
   overflow-y: auto;
   transform: translateX(-100%);
@@ -183,11 +177,11 @@ h3 {
 
 .side-label {
   color: var(--base1);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
-  padding: 0.75rem 0.625rem 0.25rem;
+  letter-spacing: 0.12em;
+  padding: 1.25rem 0.75rem 0.4rem;
 }
 
 .side-label:first-child {
@@ -204,28 +198,32 @@ h3 {
   color: var(--base00);
   background: none;
   border: none;
-  border-radius: 0.375rem;
-  padding: 0.45rem 0.625rem;
-  min-height: 2.25rem;
+  border-radius: 0.25rem;
+  padding: 0.4rem 0.75rem;
+  min-height: 2.1rem;
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 @media (hover: hover) {
   .nav-tab:hover {
-    background: var(--base3);
+    background: var(--base2);
   }
 }
 
+/* Active view: a slim accent rule on the left + a faint wash, no heavy pill. */
 .nav-tab.active {
   color: var(--base01);
-  background: var(--base3);
+  background: var(--base2);
   font-weight: 700;
+  box-shadow: inset 2px 0 0 var(--cyan);
 }
 
 .nav-count {
   color: var(--base1);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 
 .nav-tab.active .nav-count {
@@ -298,7 +296,7 @@ h3 {
 }
 
 .side-footer {
-  border-top: 1px solid var(--base3);
+  border-top: 1px solid var(--base2);
   padding-top: 0.5rem;
   margin-top: 0.5rem;
 }
@@ -323,8 +321,11 @@ h3 {
 }
 
 .detail-empty {
-  padding: 3rem 1rem;
+  padding: 4rem 1rem;
   text-align: center;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 1.05rem;
 }
 
 /* Mobile base: one column at a time. Opening a task swaps the list for the
@@ -340,14 +341,20 @@ h3 {
   padding: 1rem 1rem 4rem;
 }
 
-/* The terminal manages its own full-bleed height, so drop the pane padding. */
-.detail-col:has(.terminal-view) {
+/* The terminal manages its own full-bleed height, so drop the pane padding.
+   (Must out-rank `.panes.pane-open .detail-col`, which sets the padding.) */
+.panes .detail-col:has(.terminal-view),
+.panes.pane-open .detail-col:has(.terminal-view) {
   padding: 0;
+  overflow: hidden;
 }
 
 .view > h1 {
-  margin: 0.5rem 0 1rem;
-  font-size: 1.4rem;
+  margin: 0.35rem 0 1rem;
+  font-family: var(--serif);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .muted {
@@ -356,36 +363,44 @@ h3 {
 
 /* ---- chips ---- */
 
+/* Chips read like a highlighter swipe on paper: a soft marker-colour fill
+   behind dark ink. The colour classes set `--mark`; the chip mixes it into the
+   page cream so it stays a highlight, not a solid badge. */
 .chip {
   display: inline-block;
-  font-size: 0.75rem;
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   line-height: 1;
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.75rem;
-  background: var(--base2);
+  padding: 0.22rem 0.45rem;
+  border-radius: 0.15rem;
+  border: none;
+  /* white ink on a solid marker fill (deepened a touch for contrast) */
+  color: #fff;
+  background: color-mix(in srgb, var(--mark, var(--base1)) 88%, var(--base01));
   white-space: nowrap;
 }
 
 .c-base1 {
-  color: var(--base1);
+  --mark: var(--base1);
 }
 .c-base00 {
-  color: var(--base00);
+  --mark: var(--base0);
 }
 .c-blue {
-  color: var(--blue);
+  --mark: var(--blue);
 }
 .c-violet {
-  color: var(--violet);
+  --mark: var(--violet);
 }
 .c-orange {
-  color: var(--orange);
+  --mark: var(--orange);
 }
 .c-green {
-  color: var(--green);
+  --mark: var(--green);
 }
 .c-red {
-  color: var(--red);
+  --mark: var(--red);
 }
 .strike {
   text-decoration: line-through;
@@ -424,12 +439,18 @@ h3 {
 .next-up h2,
 .phase-group h2,
 .invalid-files h2 {
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   color: var(--base1);
-  margin: 1.25rem 0 0.25rem;
+  margin: 1.75rem 0 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--base2);
+}
+
+.phase-group:first-child h2 {
+  margin-top: 0.5rem;
 }
 
 .next-item {
@@ -472,12 +493,19 @@ h3 {
 .filter-bar input[type="search"] {
   width: 100%;
   min-height: 44px;
-  padding: 0.5rem 0.75rem;
+  padding: 0.5rem 0.25rem;
   font: inherit;
   color: var(--base00);
-  background: var(--base2);
+  background: none;
   border: none;
-  border-radius: 0.25rem;
+  /* an underline, like a ruled line on the page, not a boxed field */
+  border-bottom: 1px solid var(--base2);
+  border-radius: 0;
+}
+
+.filter-bar input[type="search"]:focus {
+  outline: none;
+  border-bottom-color: var(--base1);
 }
 
 .filter-bar input[type="search"]::placeholder {
@@ -515,16 +543,28 @@ h3 {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .list-head h1 {
-  margin: 0.25rem 0 0.75rem;
-  font-size: 1.4rem;
+  margin: 0.25rem 0;
+  font-family: var(--serif);
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .list-count {
   color: var(--base1);
   font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* primary action lives with the list (its main surface), not the top corner;
+   its look is shared with the detail action buttons (see the .actions block) */
+.new-task {
+  margin-left: auto;
+  align-self: center;
 }
 
 .task-list {
@@ -535,17 +575,24 @@ h3 {
 .task-row {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
+  gap: 0.75rem;
   min-height: 44px;
-  padding: 0.625rem 0.5rem;
-  border-radius: 0.375rem;
+  padding: 0.7rem 0.6rem;
+  /* thin ledger rule between rows; the group heading sits above the first */
+  border-bottom: 1px solid var(--base2);
   color: var(--base00);
+  transition: background 0.12s ease;
+}
+
+.task-row:last-child {
+  border-bottom: none;
 }
 
 .task-id {
   color: var(--base1);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .task-title {
@@ -572,6 +619,9 @@ h3 {
 
 .detail-id {
   margin-top: 0.5rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  color: var(--base1);
 }
 
 .detail-chips {
@@ -589,23 +639,47 @@ h3 {
   margin: 0 0 1.5rem;
 }
 
+/* One button voice everywhere: quiet outline on the paper, compact height,
+   filling to the tint on hover. Shared by + New, detail actions and forms. */
 .actions button,
-.actions .btn {
+.actions .btn,
+.new-task {
   font: inherit;
-  min-height: 44px;
-  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  min-height: 2.35rem;
+  padding: 0.4rem 0.9rem;
   color: var(--base01);
-  background: var(--base2);
-  border: none;
-  border-radius: 0.25rem;
+  background: none;
+  border: 1px solid color-mix(in srgb, var(--base1) 55%, var(--base2));
+  border-radius: 0.3rem;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+  transition: background 0.12s ease, border-color 0.12s ease, filter 0.12s ease;
 }
 
+@media (hover: hover) {
+  .actions button:not(:disabled):hover,
+  .actions .btn:hover,
+  .new-task:hover {
+    background: var(--base2);
+    border-color: var(--base1);
+  }
+}
+
+/* the one primary action stays a filled accent */
 .actions button[type="submit"] {
   color: var(--base3);
   background: var(--blue);
+  border-color: var(--blue);
+}
+
+@media (hover: hover) {
+  .actions button[type="submit"]:not(:disabled):hover {
+    background: var(--blue);
+    border-color: var(--blue);
+    filter: brightness(1.08);
+  }
 }
 
 .actions button:disabled {
@@ -616,20 +690,28 @@ h3 {
 .frontmatter {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 0.25rem 1rem;
+  gap: 0.3rem 1.25rem;
   margin-bottom: 1.5rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--base2);
+  border-bottom: 1px solid var(--base2);
   font-size: 0.9rem;
 }
 
 .frontmatter dt {
   color: var(--base1);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  /* optically align the small-caps label with its value's baseline */
+  padding-top: 0.25rem;
 }
 
 /* ---- markdown body ---- */
 
+/* the frontmatter ledger above already closes with a rule */
 .markdown {
-  border-top: 1px solid var(--base2);
-  padding-top: 1.25rem;
+  padding-top: 0.25rem;
 }
 
 .markdown h1,
@@ -638,14 +720,16 @@ h3 {
 .markdown h4,
 .markdown h5,
 .markdown h6 {
-  margin: 1.25rem 0 0.5rem;
+  margin: 1.5rem 0 0.5rem;
+  font-family: var(--serif);
+  letter-spacing: -0.005em;
 }
 
 .markdown h1 {
-  font-size: 1.25rem;
+  font-size: 1.35rem;
 }
 .markdown h2 {
-  font-size: 1.1rem;
+  font-size: 1.15rem;
 }
 .markdown h3,
 .markdown h4,
@@ -759,6 +843,14 @@ h3 {
   padding: 0.25rem 0.625rem;
   min-height: 2rem;
   cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+@media (hover: hover) {
+  .rule-remove:hover {
+    background: var(--base2);
+    border-color: var(--red);
+  }
 }
 
 .rule-fields {
@@ -1125,6 +1217,18 @@ h3 {
   .scrim {
     display: none;
   }
+  /* the header sits on the body's grid: the brand cell mirrors the sidebar
+     column (same width, same text offset, same hairline), and the date starts
+     exactly where the list content starts */
+  .header-brand {
+    width: 15rem;
+    padding: 0 1.5rem;
+    border-right: 1px solid var(--base2);
+  }
+  .header-date {
+    margin-left: 2rem;
+    padding-right: 0;
+  }
   .sidebar {
     /* pinned open, no drawer behaviour */
     transform: none;
@@ -1160,14 +1264,18 @@ h3 {
 /* ---- desktop: true three-pane, list + detail side by side ---- */
 
 @media (min-width: 1100px) {
+  .header-date {
+    margin-left: 2.25rem;
+  }
   /* Match the specificity of the mobile `.panes.pane-open .list-col` rule so
-     the list stays visible beside the detail even with a task open. */
+     the list stays visible beside the detail even with a task open. The list
+     is the primary surface, so it gets the wider share. */
   .panes .list-col,
   .panes.pane-open .list-col {
     display: block;
-    flex: 0 0 27rem;
+    flex: 0 0 38rem;
     border-right: 1px solid var(--base2);
-    padding: 1.5rem 1.75rem 4rem;
+    padding: 2rem 2.25rem 4rem;
   }
   .panes.pane-open .detail-col,
   .detail-col {
@@ -1175,8 +1283,10 @@ h3 {
     flex: 1;
     padding: 1.75rem 2.25rem 4rem;
   }
-  .detail-col:has(.terminal-view) {
+  .panes .detail-col:has(.terminal-view),
+  .panes.pane-open .detail-col:has(.terminal-view) {
     padding: 0;
+    overflow: hidden;
   }
   /* The console is the exception to three-pane: drop the list so the terminal
      fills the whole content area. (Specificity beats `.panes .list-col`.) */
