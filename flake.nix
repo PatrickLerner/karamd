@@ -90,49 +90,25 @@
           };
         };
 
-        # The SPA's node_modules, as a fixed-output derivation (the only step
-        # allowed to touch the network). Fill `outputHash` after the first
-        # `nix build .#karamd-web`: Nix prints the real hash on mismatch, exactly
-        # like the prebuilt-binary hashes above.
-        karamd-web-deps = final.stdenvNoCC.mkDerivation {
-          pname = "karamd-web-deps";
-          inherit version;
-          src = ./web;
-          nativeBuildInputs = [ final.bun ];
-          dontConfigure = true;
-          buildPhase = ''
-            export HOME=$TMPDIR
-            bun install --frozen-lockfile --no-progress
-          '';
-          installPhase = ''
-            mkdir -p $out
-            cp -R node_modules $out/node_modules
-          '';
-          dontFixup = true;
-          outputHashMode = "recursive";
-          outputHashAlgo = "sha256";
-          outputHash = "sha256-r7+2GF7p8NsDqX+RNgWHapBVYMqn0D+/yx2DTd0/JVI=";
-        };
-
-        # The built SPA bundle (offline: deps come from karamd-web-deps).
-        karamd-web-bundle = final.stdenvNoCC.mkDerivation {
-          pname = "karamd-web-bundle";
-          inherit version;
-          src = ./web;
-          nativeBuildInputs = [ final.bun ];
-          dontConfigure = true;
-          buildPhase = ''
-            export HOME=$TMPDIR
-            cp -R ${final.karamd-web-deps}/node_modules ./node_modules
-            # --production (not just NODE_ENV + --minify) is what makes bun emit
-            # the React *production* JSX runtime; the dev runtime bundles a
-            # jsxDEV that resolves to undefined here and renders a blank page.
-            bun build src/main.tsx --outdir dist --production
-            cp index.html src/styles.css dist/
-            cp -R public/. dist/
-          '';
-          installPhase = ''cp -R dist $out'';
-        };
+        # The prebuilt SPA bundle: `dist/` built by bun in the release workflow
+        # (deterministic, `--production`) and attached to the GitHub Release, so
+        # Nix just fetches and unpacks it. No `bun install` in the sandbox (which
+        # would need a fragile, platform-varying fixed-output hash) and no bun in
+        # the eval closure. Fill `webBundleHash` after a release, the same way as
+        # the prebuilt-binary hashes above.
+        karamd-web-bundle =
+          final.runCommand "karamd-web-bundle-${version}"
+            {
+              src = final.fetchurl {
+                url = "https://github.com/PatrickLerner/karamd/releases/download/v${version}/karamd-web-dist.tar.gz";
+                hash = "sha256-0RObl+/lMSkeQeTCwnLJaCMJMznl8ldprmTO/jlA2hY=";
+              };
+              nativeBuildInputs = [ final.gnutar final.gzip ];
+            }
+            ''
+              mkdir -p $out
+              tar -xzf $src -C $out
+            '';
 
         # karamd + the pinned bundle in one closure: the wrapper defaults
         # KARAMD_WEB_DIR to the store path, so `karamd web` needs no --web-dir.
