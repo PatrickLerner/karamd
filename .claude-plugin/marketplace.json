@@ -1,0 +1,15 @@
+{
+  "name": "karamd",
+  "owner": {
+    "name": "Patrick Lerner"
+  },
+  "plugins": [
+    {
+      "name": "karamd-formats",
+      "source": "./",
+      "description": "Skills documenting the taskmd task-file format, the karamd .taskmd.recurring.yaml recurring-rules config, and the karamd CLI (usage + idempotency contract).",
+      "category": "productivity",
+      "keywords": ["taskmd", "karamd", "tasks", "markdown", "recurring"]
+    }
+  ]
+}

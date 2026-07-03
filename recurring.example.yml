@@ -22,6 +22,17 @@
   priority: high
   tags: [personal]
 
+# Fixed day of every month: the task appears `lead_days` before `day_of_month`,
+# once per month (dedup marker key:YYYY-MM). Days 29-31 clamp to the month's
+# last day, so 31 still fires in February. lead_days must be 0-27.
+- key: monthly-topup
+  title: "Top up account"
+  trigger: monthly
+  day_of_month: 12
+  lead_days: 7
+  priority: medium
+  tags: [finance]
+
 # Optional `body`: markdown for the generated task, replacing the default
 # `## Objective / ## Tasks / ## Acceptance Criteria` TODO stub. Omit it to keep
 # the stub. karamd still writes the frontmatter, the `# <title>` heading, and a

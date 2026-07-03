@@ -89,6 +89,65 @@
             mainProgram = "karamd";
           };
         };
+
+        # The SPA's node_modules, as a fixed-output derivation (the only step
+        # allowed to touch the network). Fill `outputHash` after the first
+        # `nix build .#karamd-web`: Nix prints the real hash on mismatch, exactly
+        # like the prebuilt-binary hashes above.
+        karamd-web-deps = final.stdenvNoCC.mkDerivation {
+          pname = "karamd-web-deps";
+          inherit version;
+          src = ./web;
+          nativeBuildInputs = [ final.bun ];
+          dontConfigure = true;
+          buildPhase = ''
+            export HOME=$TMPDIR
+            bun install --frozen-lockfile --no-progress
+          '';
+          installPhase = ''
+            mkdir -p $out
+            cp -R node_modules $out/node_modules
+          '';
+          dontFixup = true;
+          outputHashMode = "recursive";
+          outputHashAlgo = "sha256";
+          outputHash = final.lib.fakeHash;
+        };
+
+        # The built SPA bundle (offline: deps come from karamd-web-deps).
+        karamd-web-bundle = final.stdenvNoCC.mkDerivation {
+          pname = "karamd-web-bundle";
+          inherit version;
+          src = ./web;
+          nativeBuildInputs = [ final.bun ];
+          dontConfigure = true;
+          buildPhase = ''
+            export HOME=$TMPDIR
+            cp -R ${final.karamd-web-deps}/node_modules ./node_modules
+            # --production (not just NODE_ENV + --minify) is what makes bun emit
+            # the React *production* JSX runtime; the dev runtime bundles a
+            # jsxDEV that resolves to undefined here and renders a blank page.
+            bun build src/main.tsx --outdir dist --production
+            cp index.html src/styles.css dist/
+            cp -R public/. dist/
+          '';
+          installPhase = ''cp -R dist $out'';
+        };
+
+        # karamd + the pinned bundle in one closure: the wrapper defaults
+        # KARAMD_WEB_DIR to the store path, so `karamd web` needs no --web-dir.
+        karamd-web = final.runCommand "karamd-web-${version}" {
+          nativeBuildInputs = [ final.makeWrapper ];
+          meta = {
+            description = "karamd with the bundled web UI";
+            license = final.lib.licenses.mit;
+            mainProgram = "karamd";
+          };
+        } ''
+          mkdir -p $out/bin
+          makeWrapper ${final.karamd}/bin/karamd $out/bin/karamd \
+            --set-default KARAMD_WEB_DIR ${final.karamd-web-bundle}
+        '';
       };
 
       packages = forAllSystems (
@@ -102,6 +161,8 @@
           default = pkgs.karamd;
           # Prebuilt release binary (no local compilation).
           karamd-bin = mkBin system;
+          # karamd bundled with the web UI (frontend + binary in one closure).
+          inherit (pkgs) karamd-web;
         }
       );
 
@@ -124,6 +185,7 @@
               pkgs.rustc
               pkgs.clippy
               pkgs.rustfmt
+              pkgs.bun
             ];
           };
         }

@@ -33,8 +33,35 @@ jobs:
       - name: Test
         run: cargo test --all-features
 
+      - name: Validate this repo's own task vault
+        run: cargo run --quiet -- validate --strict
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Coverage (100% lines required)
-        run: cargo llvm-cov --all-features --ignore-filename-regex 'src/main.rs' --fail-under-lines 100
+        # src/main.rs is the binary shim; src/web_terminal.rs is the PTY +
+        # WebSocket glue (spawns processes, bridges blocking IO to an async
+        # socket) whose pure logic lives in the covered src/terminal.rs.
+        run: cargo llvm-cov --all-features --ignore-filename-regex 'src/(main|web_terminal)\.rs' --fail-under-lines 100
+
+  web:
+    name: frontend (bun build + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        working-directory: web
+
+      - name: Typecheck
+        run: bun run typecheck
+        working-directory: web
+
+      - name: Build SPA bundle
+        run: bun run build
+        working-directory: web

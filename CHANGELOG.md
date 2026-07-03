@@ -4,6 +4,39 @@ All notable changes to karamd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Third trigger kind `monthly`: due `lead_days` before a fixed `day_of_month`,
+  once per month (dedup marker `key:YYYY-MM`). Days 29-31 clamp to the month's
+  last day so `31` fires in February too.
+- taskmd library layer (`src/taskmd/`): full `.taskmd.yaml` config (phases, id
+  strategies, workflow, scopes), complete task model with round-trip-safe
+  frontmatter (unknown fields preserved, CRLF tolerated), auto
+  `completed_at`/`cancelled_at` maintenance, atomic collision-safe writes, and
+  the dependency/parent graph (readiness, cycles, dangling refs).
+- Task verbs: `create` (with `--template` feature/bug/chore or custom
+  `.taskmd/templates/`), `complete` (workflow-aware: pr-review sets
+  `in-review` + `--pr`), `cancel`, `reopen`, `status`, `show`.
+- `list` with a query mini-grammar (`field:value`, `>=`/`>`/`<=`/`<` on
+  priority/effort/dates, `AND`/`OR`/`NOT`, parentheses) and `--json`/`--yaml`
+  machine output backed by one serializable view.
+- `next`: ranked recommendations, a faithful port of taskmd's algorithm
+  (score-for-score verified), with a human view that also surfaces blocked
+  high-priority tasks and the best unblocker.
+- `validate`: lints the vault against the taskmd spec (errors exit 1; warnings
+  exit 2 under `--strict` for CI gating).
+- `web`: `karamd web` serves a React SPA (built with bun) plus a JSON API over
+  the taskmd library, on `axum`/`tokio`. Binds `127.0.0.1` by default (tailnet
+  is the security boundary). Nix bundles the frontend and binary in one closure
+  (`packages.karamd-web`). Manage recurring rules from the UI too, with a
+  dry-run preview (`GET/PUT /api/rules`, `POST /api/rules/preview`).
+- Embedded terminal: a task's **Run with Claude** opens an xterm.js session
+  wired over `GET /api/tasks/{id}/run` to a process spawned in a PTY (cwd = the
+  vault), seeded with the task's context. Command is configurable via
+  `--run-command` / `KARAMD_RUN_COMMAND` (default `claude`).
+
 ## [0.1.2] - 2026-07-02
 
 ### Added

@@ -50,6 +50,49 @@ pub fn calendar_due(today: NaiveDate, mm_dd: &str, lead_days: i64) -> Result<Opt
     Ok(None)
 }
 
+/// Last day of `month` in `year` (the day before the first of the next month).
+fn last_day_of_month(year: i32, month: u32) -> u32 {
+    let (ny, nm) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    NaiveDate::from_ymd_opt(ny, nm, 1)
+        .expect("first of month is always valid")
+        .pred_opt()
+        .expect("first of month has a predecessor")
+        .day()
+}
+
+/// Resolve `day` to a concrete date in (`year`, `month`). Days past the end of
+/// the month (29-31) clamp to its last day, so a rule for the 31st still fires
+/// in 30-day months and February.
+pub fn monthly_occurrence(year: i32, month: u32, day: u32) -> NaiveDate {
+    let day = day.min(last_day_of_month(year, month));
+    NaiveDate::from_ymd_opt(year, month, day).expect("clamped day is valid")
+}
+
+/// monthly: if today falls within the `lead_days` window before an occurrence,
+/// return that occurrence's `YYYY-MM` (the dedup discriminator). Checks this
+/// month and next month, so a window that straddles a month boundary resolves
+/// to next month's occurrence.
+pub fn monthly_due(today: NaiveDate, day_of_month: u32, lead_days: i64) -> Option<String> {
+    let (mut year, mut month) = (today.year(), today.month());
+    for _ in 0..2 {
+        let occ = monthly_occurrence(year, month, day_of_month);
+        let delta = (occ - today).num_days();
+        if (0..=lead_days).contains(&delta) {
+            return Some(format!("{year:04}-{month:02}"));
+        }
+        (year, month) = if month == 12 {
+            (year + 1, 1)
+        } else {
+            (year, month + 1)
+        };
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +186,88 @@ mod tests {
     #[test]
     fn calendar_propagates_parse_error() {
         assert!(calendar_due(d(2026, 7, 1), "nope", 10).is_err());
+    }
+
+    #[test]
+    fn monthly_occurrence_normal_day() {
+        assert_eq!(monthly_occurrence(2026, 7, 12), d(2026, 7, 12));
+    }
+
+    #[test]
+    fn monthly_occurrence_clamps_to_short_month() {
+        assert_eq!(monthly_occurrence(2026, 6, 31), d(2026, 6, 30));
+        assert_eq!(monthly_occurrence(2026, 2, 30), d(2026, 2, 28));
+        assert_eq!(monthly_occurrence(2028, 2, 31), d(2028, 2, 29)); // leap year
+    }
+
+    #[test]
+    fn monthly_occurrence_december() {
+        // Exercises the year rollover inside last_day_of_month.
+        assert_eq!(monthly_occurrence(2026, 12, 31), d(2026, 12, 31));
+    }
+
+    #[test]
+    fn monthly_inside_window_returns_year_month() {
+        assert_eq!(
+            monthly_due(d(2026, 7, 5), 12, 7),
+            Some("2026-07".to_string())
+        );
+    }
+
+    #[test]
+    fn monthly_on_the_day_is_due() {
+        assert_eq!(
+            monthly_due(d(2026, 7, 12), 12, 7),
+            Some("2026-07".to_string())
+        );
+    }
+
+    #[test]
+    fn monthly_before_window_not_due() {
+        assert_eq!(monthly_due(d(2026, 7, 4), 12, 7), None);
+    }
+
+    #[test]
+    fn monthly_after_the_day_not_due_until_next_window() {
+        assert_eq!(monthly_due(d(2026, 7, 13), 12, 7), None);
+        assert_eq!(
+            monthly_due(d(2026, 8, 5), 12, 7),
+            Some("2026-08".to_string())
+        );
+    }
+
+    #[test]
+    fn monthly_window_straddles_month_boundary() {
+        // today Jul 28, day 2, lead 7 -> Aug 2 is 5 days out.
+        assert_eq!(
+            monthly_due(d(2026, 7, 28), 2, 7),
+            Some("2026-08".to_string())
+        );
+    }
+
+    #[test]
+    fn monthly_window_straddles_year_boundary() {
+        assert_eq!(
+            monthly_due(d(2026, 12, 28), 2, 7),
+            Some("2027-01".to_string())
+        );
+    }
+
+    #[test]
+    fn monthly_zero_lead_only_on_the_day() {
+        assert_eq!(monthly_due(d(2026, 7, 11), 12, 0), None);
+        assert_eq!(
+            monthly_due(d(2026, 7, 12), 12, 0),
+            Some("2026-07".to_string())
+        );
+    }
+
+    #[test]
+    fn monthly_clamped_day_fires_in_short_month() {
+        // day 31 in June clamps to Jun 30.
+        assert_eq!(
+            monthly_due(d(2026, 6, 28), 31, 7),
+            Some("2026-06".to_string())
+        );
     }
 }

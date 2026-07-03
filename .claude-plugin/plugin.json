@@ -1,0 +1,12 @@
+{
+  "name": "karamd-formats",
+  "description": "Skills documenting the taskmd task-file format, the karamd .taskmd.recurring.yaml rules config, and the karamd CLI, so any Claude session can read, write, and validate a taskmd vault correctly.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Patrick Lerner"
+  },
+  "homepage": "https://github.com/PatrickLerner/karamd",
+  "repository": "https://github.com/PatrickLerner/karamd",
+  "license": "MIT",
+  "keywords": ["taskmd", "karamd", "tasks", "markdown", "recurring"]
+}

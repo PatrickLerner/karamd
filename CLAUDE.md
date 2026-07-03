@@ -1,38 +1,81 @@
-This is **karamd**, a Rust CLI that generates recurring tasks for a taskmd
-markdown vault. taskmd has no recurrence; karamd is the layer that adds it.
+This is **karamd**, a Rust CLI for taskmd markdown vaults. It began as a
+recurring-task generator (taskmd has no recurrence) and is growing into a
+general taskmd tool: task verbs, query, ranked next, validate, web UI
+(#008–#016 in `tasks/`).
 
 ## What it is
 
-- Reads a rules file, inspects existing task files, creates a new task only when
-  a rule is due. Must be **idempotent** — re-running on the same day never
-  duplicates. Dedup marker: `recurring: <key>` frontmatter on generated tasks.
-- Two triggers: `after_completion` (N days after the last one was completed) and
-  `calendar` (lead_days before a fixed annual date, once per year). The code
-  reads task *state* each run, never blindly emits on a schedule.
-- karamd only **adds** files and **reads** completion state. Completions happen
-  elsewhere (in taskmd/Obsidian), not in karamd. The vault is kept in sync across
-  devices by an external sync setup, not by karamd — karamd just writes new task
-  files into the synced dir; there is no git/pull/commit/push wrapper.
+- **Recurring generator** (`karamd generate`): reads a rules file, inspects
+  existing task files, creates a new task only when a rule is due. Must be
+  **idempotent** — re-running on the same day never duplicates. Dedup marker:
+  `recurring: <key>` frontmatter on generated tasks.
+- Three triggers: `after_completion` (N days after the last one was completed),
+  `calendar` (lead_days before a fixed annual date, once per year), and
+  `monthly` (lead_days before a fixed day of the month, once per month; marker
+  `key:YYYY-MM`; day 29-31 clamps to the month's last day; lead_days 0-27). The
+  code reads task *state* each run, never blindly emits on a schedule.
+- **Design shift (settled in #008):** the *generator* still only adds files and
+  reads completion state, but karamd as a whole is now a first-class taskmd
+  writer via the `src/taskmd/` library layer (verbs, web UI edits). Completions
+  can happen in taskmd/Obsidian *or* karamd. The vault is kept in sync across
+  devices by an external sync setup, not by karamd — no git/pull/commit/push
+  wrapper. All writes are defensive against concurrent sync (atomic temp+rename,
+  `create_new` for new files, re-read before mutate, id allocation at write
+  time).
+- **Compatibility contract:** karamd's CLI surface may differ from taskmd's, but
+  every file written must match the taskmd spec (1.2, taskmd 0.2.5; regenerate
+  with `taskmd spec --stdout`). Unknown frontmatter fields are preserved
+  verbatim; CRLF tolerated.
 
 ## Layout
 
 Split into a library crate (all logic, unit-testable) plus a thin binary:
 
 - `src/main.rs` — three-line shim; calls `karamd::run(args)`.
-- `src/lib.rs` — CLI (clap), `run`, the `generate` orchestration, and the
-  per-trigger `decide` step. `Report`/`Created` describe what a run did.
+- `src/lib.rs` — CLI (clap subcommand tree), `run`, the `generate`
+  orchestration, and the per-trigger `decide` step. `Report`/`Created` describe
+  what a run did.
 - `src/rule.rs` — `Rule` model, `Trigger` enum, `load_rules`, `Rule::validate`,
   and `validate_all` (whole-file check: unique keys + well-formed `annual`).
 - `src/due.rs` — pure due-checks (`after_completion_due`, `calendar_due`,
   `calendar_occurrence`). Every fn takes `today: NaiveDate` so tests never touch
   the clock.
-- `src/task.rs` — vault scanning (`scan_dir`, `tasks_dir`), `slugify`, `next_id`,
-  frontmatter parsing, and `render_task`.
+- `src/task.rs` — the generator's own thin scanner (`scan_dir`, `tasks_dir`),
+  `slugify`, `next_id`, frontmatter parsing, and `render_task`.
+- `src/taskmd/` — the reusable taskmd library layer (#008):
+  - `config.rs` — full `.taskmd.yaml`: `dir`, `phases`, `id` strategy
+    (sequential/prefixed/random/ulid; prefixed emits `dr001`, **no separator** —
+    verified against taskmd 0.2.5, the spec doc's `dr-001` is wrong), `workflow`
+    (solo/pr-review), `scopes`.
+  - `model.rs` — `Task` backed by its complete frontmatter as an ordered YAML
+    mapping, so unknown fields round-trip untouched. Spec enums (`completed`,
+    not `done`; hyphenated `in-progress`/`in-review`). Auto set/clear of
+    `completed_at`/`cancelled_at` on status change. `created` alias accepted.
+  - `store.rs` — `Vault`: recursive scan (dir-derived groups; non-task files
+    ignored, broken task files reported separately), atomic saves, collision-
+    safe `create`, re-reading `update`. Entropy is injectable (`Entropy` trait)
+    so id-generation tests are deterministic.
+  - `graph.rs` — dependency graph: readiness (all deps `completed`; a
+    `cancelled` dep blocks, matching taskmd), blockers, transitive downstream
+    count/depth, cycle + dangling detection, `parent` hierarchy validation
+    (exists / no self-ref / no cycles).
+- CLI verbs + views over the library: `src/verbs.rs` (create/edit/list/show/
+  status/complete/search), `src/query.rs` (the `list` mini-grammar), `src/next.rs`
+  (taskmd-parity ranking), `src/validate.rs` (spec lint), `src/analyze.rs`
+  (`graph` DOT + `stats`), `src/output.rs` (one `TaskView` behind human/JSON/YAML).
+- Web (#009/#013): `src/web.rs` — axum JSON API over the library (`karamd web`,
+  `--bind`/`--web-dir`/`--run-command`), served alongside the bun-built SPA in
+  `web/`. Embedded terminal (#010): `src/terminal.rs` (pure prompt-seeding +
+  argv parsing, tested) and `src/web_terminal.rs` (the PTY + WebSocket glue,
+  excluded from coverage).
 - `recurring.example.yml` — rule format reference.
 
 Core logic keeps I/O thin and functions pure so the suite hits **100% line
-coverage** (`cargo llvm-cov --ignore-filename-regex 'src/main.rs'`); the binary
-shim is excluded. TDD: write the test, watch it fail, implement.
+coverage** (`cargo llvm-cov --ignore-filename-regex 'src/(main|web_terminal)\.rs'`).
+Two files are excluded as untestable process/network glue: `src/main.rs` (the
+binary shim) and `src/web_terminal.rs` (the PTY + WebSocket bridge for the
+embedded terminal, whose pure logic lives in the covered `src/terminal.rs`). TDD:
+write the test, watch it fail, implement.
 
 ## taskmd frontmatter to emit (match taskmd's own output)
 
@@ -102,3 +145,13 @@ dropped ("prüfen" → "pr-fen"). Covered by a unit test — keep it green.
 
 Managed with taskmd in `tasks/` (MCP via the `taskmd-mcp` plugin, enabled in
 `.claude/settings.json`). Prefer the taskmd MCP tools. Fill task templates fully.
+
+Never hand-write or hand-edit task `.md` files with an editor. Create and modify
+them through the CLI tool — `taskmd add` / `taskmd set` (and `karamd` once it can,
+per #011/#015) — so files are always spec-valid. Run `taskmd validate` after
+changes.
+
+Any follow-up or bug found mid-work that is not fixed immediately becomes its own
+taskmd task in `tasks/` (don't leave it only in a commit message, a code comment,
+or the conversation). Link dependencies via the `dependencies:` frontmatter. This
+is a public repo: never put secrets or personal paths/identifiers in task files.
