@@ -826,25 +826,80 @@ textarea::placeholder {
 
 /* ---- recurring rules ---- */
 
-.rule-card {
-  border: 1px solid var(--base2);
-  border-radius: 0.25rem;
-  padding: 0.75rem;
+.rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
   margin-bottom: 1rem;
 }
 
-.rule-card-head {
+/* Each rule is a compact row; clicking the summary expands its fields. */
+.rule-item {
+  border: 1px solid var(--base2);
+  border-radius: 0.25rem;
+}
+
+.rule-item.open {
+  padding-bottom: 0.75rem;
+}
+
+.rule-summary {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 0.375rem;
-  margin-bottom: 0.75rem;
+  padding-right: 0.5rem;
+}
+
+.rule-summary-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0; /* let the title truncate instead of overflowing */
+  min-height: 2.75rem;
+  padding: 0.375rem 0.5rem;
+  font: inherit;
+  text-align: left;
+  color: var(--base00);
+  background: none;
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .rule-summary-btn:hover {
+    background: var(--base2);
+  }
+}
+
+.rule-caret {
+  width: 1ch;
+  color: var(--base1);
+}
+
+.rule-key {
+  font-weight: 700;
+  color: var(--base01);
+  white-space: nowrap;
+}
+
+.rule-summary-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--base0);
+}
+
+.rule-sched {
+  white-space: nowrap;
 }
 
 .rule-remove {
   font: inherit;
   font-size: 0.8rem;
-  margin-left: auto;
   color: var(--red);
   background: none;
   border: 1px solid var(--base2);
@@ -864,6 +919,7 @@ textarea::placeholder {
 
 .rule-fields {
   gap: 0.75rem;
+  padding: 0 0.75rem;
 }
 
 .rule-save {

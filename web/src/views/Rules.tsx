@@ -1,4 +1,9 @@
 import { useEffect, useState } from "react";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { api, errorMessage } from "../api";
 import { ErrorBanner } from "../components/Banner";
 import {
@@ -22,7 +27,7 @@ function splitList(input: string): string[] {
     .filter((s) => s !== "");
 }
 
-// A short human summary of a rule's schedule, shown as a chip on the card.
+// A short human summary of a rule's schedule, shown on the collapsed row.
 function scheduleSummary(rule: Rule): string {
   switch (rule.trigger) {
     case "after_completion":
@@ -44,17 +49,14 @@ function num(value: string): number | undefined {
   return Number.isNaN(n) ? undefined : n;
 }
 
-function RuleCard({
+// The editable fields for one rule (shown when its row is expanded).
+function RuleFields({
   rule,
   onChange,
-  onRemove,
 }: {
   rule: Rule;
   onChange: (next: Rule) => void;
-  onRemove: () => void;
 }) {
-  // Local text state for the tags input so the user can type commas freely;
-  // it is committed to the rule on every change via splitList.
   const set = (patch: Partial<Rule>) => onChange({ ...rule, ...patch });
 
   function setTrigger(trigger: Trigger) {
@@ -72,11 +74,202 @@ function RuleCard({
   }
 
   return (
-    <section className="rule-card">
-      <div className="rule-card-head">
-        <span className="chip c-blue">{rule.trigger}</span>
-        <span className="chip c-base00">{rule.key || "(no key)"}</span>
-        <span className="chip c-base1">{scheduleSummary(rule)}</span>
+    <div className="task-form rule-fields">
+      <div className="form-row">
+        <label>
+          Key
+          <input
+            type="text"
+            value={rule.key}
+            onChange={(e) => set({ key: e.target.value })}
+            placeholder="rotate-backups"
+          />
+        </label>
+        <label>
+          Trigger
+          <select
+            value={rule.trigger}
+            onChange={(e) => setTrigger(e.target.value as Trigger)}
+          >
+            {TRIGGERS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label>
+        Title
+        <input
+          type="text"
+          value={rule.title}
+          onChange={(e) => set({ title: e.target.value })}
+          placeholder="Rotate vault backups"
+        />
+      </label>
+
+      {rule.trigger === "after_completion" && (
+        <label>
+          Every (days after last completion)
+          <input
+            type="number"
+            min={1}
+            value={rule.every_days ?? ""}
+            onChange={(e) => set({ every_days: num(e.target.value) })}
+            placeholder="30"
+          />
+        </label>
+      )}
+
+      {rule.trigger === "calendar" && (
+        <div className="form-row">
+          <label>
+            Annual date (MM-DD)
+            <input
+              type="text"
+              value={rule.annual ?? ""}
+              onChange={(e) => set({ annual: e.target.value })}
+              placeholder="12-24"
+            />
+          </label>
+          <label>
+            Lead days (before the date)
+            <input
+              type="number"
+              min={0}
+              value={rule.lead_days ?? ""}
+              onChange={(e) => set({ lead_days: num(e.target.value) })}
+              placeholder="7"
+            />
+          </label>
+        </div>
+      )}
+
+      {rule.trigger === "monthly" && (
+        <div className="form-row">
+          <label>
+            Day of month (1-31)
+            <input
+              type="number"
+              min={1}
+              max={31}
+              value={rule.day_of_month ?? ""}
+              onChange={(e) => set({ day_of_month: num(e.target.value) })}
+              placeholder="1"
+            />
+          </label>
+          <label>
+            Lead days (0-27)
+            <input
+              type="number"
+              min={0}
+              max={27}
+              value={rule.lead_days ?? ""}
+              onChange={(e) => set({ lead_days: num(e.target.value) })}
+              placeholder="3"
+            />
+          </label>
+        </div>
+      )}
+
+      <div className="form-row">
+        <label>
+          Priority
+          <select
+            value={rule.priority ?? ""}
+            onChange={(e) =>
+              set({
+                priority: e.target.value === "" ? undefined : e.target.value,
+              })
+            }
+          >
+            <option value="">unset</option>
+            {PRIORITIES.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Phase
+          <input
+            type="text"
+            value={rule.phase ?? ""}
+            onChange={(e) =>
+              set({
+                phase: e.target.value === "" ? undefined : e.target.value,
+              })
+            }
+            placeholder="next"
+          />
+        </label>
+      </div>
+
+      <label>
+        Tags (comma-separated)
+        <input
+          type="text"
+          value={(rule.tags ?? []).join(", ")}
+          onChange={(e) => {
+            const list = splitList(e.target.value);
+            set({ tags: list.length > 0 ? list : undefined });
+          }}
+          placeholder="ops, backups"
+        />
+      </label>
+
+      <label>
+        Body (optional; replaces the default TODO stub)
+        <textarea
+          value={rule.body ?? ""}
+          onChange={(e) =>
+            set({ body: e.target.value === "" ? undefined : e.target.value })
+          }
+          rows={4}
+          spellCheck={false}
+        />
+      </label>
+    </div>
+  );
+}
+
+// One rule as a compact, clickable row that expands to the editable fields.
+function RuleItem({
+  rule,
+  open,
+  onToggle,
+  onChange,
+  onRemove,
+}: {
+  rule: Rule;
+  open: boolean;
+  onToggle: () => void;
+  onChange: (next: Rule) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <section className={`rule-item${open ? " open" : ""}`}>
+      <div className="rule-summary">
+        <button
+          type="button"
+          className="rule-summary-btn"
+          aria-expanded={open}
+          onClick={onToggle}
+        >
+          <span className="rule-caret" aria-hidden="true">
+            {open ? "▾" : "▸"}
+          </span>
+          <span className="chip c-blue">{rule.trigger}</span>
+          <span className="rule-key">{rule.key || "(no key)"}</span>
+          <span className="rule-summary-title">
+            {rule.title || "untitled"}
+          </span>
+          <span className="chip c-base1 rule-sched">
+            {scheduleSummary(rule)}
+          </span>
+        </button>
         <button
           type="button"
           className="rule-remove"
@@ -86,173 +279,14 @@ function RuleCard({
           Remove
         </button>
       </div>
-      <div className="task-form rule-fields">
-        <div className="form-row">
-          <label>
-            Key
-            <input
-              type="text"
-              value={rule.key}
-              onChange={(e) => set({ key: e.target.value })}
-              placeholder="rotate-backups"
-            />
-          </label>
-          <label>
-            Trigger
-            <select
-              value={rule.trigger}
-              onChange={(e) => setTrigger(e.target.value as Trigger)}
-            >
-              {TRIGGERS.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <label>
-          Title
-          <input
-            type="text"
-            value={rule.title}
-            onChange={(e) => set({ title: e.target.value })}
-            placeholder="Rotate vault backups"
-          />
-        </label>
-
-        {rule.trigger === "after_completion" && (
-          <label>
-            Every (days after last completion)
-            <input
-              type="number"
-              min={1}
-              value={rule.every_days ?? ""}
-              onChange={(e) => set({ every_days: num(e.target.value) })}
-              placeholder="30"
-            />
-          </label>
-        )}
-
-        {rule.trigger === "calendar" && (
-          <div className="form-row">
-            <label>
-              Annual date (MM-DD)
-              <input
-                type="text"
-                value={rule.annual ?? ""}
-                onChange={(e) => set({ annual: e.target.value })}
-                placeholder="12-24"
-              />
-            </label>
-            <label>
-              Lead days (before the date)
-              <input
-                type="number"
-                min={0}
-                value={rule.lead_days ?? ""}
-                onChange={(e) => set({ lead_days: num(e.target.value) })}
-                placeholder="7"
-              />
-            </label>
-          </div>
-        )}
-
-        {rule.trigger === "monthly" && (
-          <div className="form-row">
-            <label>
-              Day of month (1-31)
-              <input
-                type="number"
-                min={1}
-                max={31}
-                value={rule.day_of_month ?? ""}
-                onChange={(e) => set({ day_of_month: num(e.target.value) })}
-                placeholder="1"
-              />
-            </label>
-            <label>
-              Lead days (0-27)
-              <input
-                type="number"
-                min={0}
-                max={27}
-                value={rule.lead_days ?? ""}
-                onChange={(e) => set({ lead_days: num(e.target.value) })}
-                placeholder="3"
-              />
-            </label>
-          </div>
-        )}
-
-        <div className="form-row">
-          <label>
-            Priority
-            <select
-              value={rule.priority ?? ""}
-              onChange={(e) =>
-                set({
-                  priority: e.target.value === "" ? undefined : e.target.value,
-                })
-              }
-            >
-              <option value="">unset</option>
-              {PRIORITIES.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Phase
-            <input
-              type="text"
-              value={rule.phase ?? ""}
-              onChange={(e) =>
-                set({
-                  phase: e.target.value === "" ? undefined : e.target.value,
-                })
-              }
-              placeholder="next"
-            />
-          </label>
-        </div>
-
-        <label>
-          Tags (comma-separated)
-          <input
-            type="text"
-            value={(rule.tags ?? []).join(", ")}
-            onChange={(e) => {
-              const list = splitList(e.target.value);
-              set({ tags: list.length > 0 ? list : undefined });
-            }}
-            placeholder="ops, backups"
-          />
-        </label>
-
-        <label>
-          Body (optional; replaces the default TODO stub)
-          <textarea
-            value={rule.body ?? ""}
-            onChange={(e) =>
-              set({ body: e.target.value === "" ? undefined : e.target.value })
-            }
-            rows={4}
-            spellCheck={false}
-          />
-        </label>
-      </div>
+      {open && <RuleFields rule={rule} onChange={onChange} />}
     </section>
   );
 }
 
 function PreviewResult({ created }: { created: PreviewCreated[] }) {
   if (created.length === 0) {
-    return (
-      <p className="muted rule-preview-empty">Nothing due today.</p>
-    );
+    return <p className="muted rule-preview-empty">Nothing due today.</p>;
   }
   return (
     <section className="rule-preview">
@@ -268,77 +302,75 @@ function PreviewResult({ created }: { created: PreviewCreated[] }) {
 }
 
 export function Rules() {
-  const [rules, setRules] = useState<Rule[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  // null means "not previewed yet"; an array (possibly empty) is a result.
-  const [preview, setPreview] = useState<PreviewCreated[] | null>(null);
+  const queryClient = useQueryClient();
+  const rulesQ = useQuery({ queryKey: ["rules"], queryFn: () => api.rules() });
 
+  // The rules are edited as a local draft, then PUT as a whole set on Save.
+  const [draft, setDraft] = useState<Rule[] | null>(null);
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // Seed the draft once the server responds.
   useEffect(() => {
-    api
-      .rules()
-      .then((r) => setRules(r.rules))
-      .catch((e: unknown) => {
-        setError(errorMessage(e));
-        setRules([]);
-      });
-  }, []);
+    if (rulesQ.data) setDraft(rulesQ.data.rules);
+  }, [rulesQ.data]);
+  useEffect(() => {
+    if (rulesQ.error) setError(errorMessage(rulesQ.error));
+  }, [rulesQ.error]);
+
+  const previewM = useMutation({
+    mutationFn: (rules: Rule[]) => api.previewRules(rules),
+    onError: (e: unknown) => setError(errorMessage(e)),
+  });
+  const saveM = useMutation({
+    mutationFn: (rules: Rule[]) => api.putRules(rules),
+    onSuccess: (res) => {
+      queryClient.setQueryData(["rules"], res);
+      setDraft(res.rules);
+      setSaved(true);
+      previewM.reset();
+    },
+    onError: (e: unknown) => setError(errorMessage(e)),
+  });
+  const busy = saveM.isPending || previewM.isPending;
+
+  // Any edit invalidates the last save/preview result.
+  function touch() {
+    setSaved(false);
+    setError(null);
+    previewM.reset();
+  }
 
   function update(index: number, next: Rule) {
-    setRules((prev) =>
+    setDraft((prev) =>
       prev === null ? prev : prev.map((r, i) => (i === index ? next : r)),
     );
-    setSaved(false);
-    setPreview(null);
+    touch();
   }
 
   function remove(index: number) {
-    setRules((prev) =>
+    setDraft((prev) =>
       prev === null ? prev : prev.filter((_, i) => i !== index),
     );
-    setSaved(false);
-    setPreview(null);
+    setOpenIdx((cur) =>
+      cur === null ? cur : cur === index ? null : cur > index ? cur - 1 : cur,
+    );
+    touch();
   }
 
   function add() {
-    setRules((prev) => [...(prev ?? []), emptyRule()]);
-    setSaved(false);
-    setPreview(null);
+    setDraft((prev) => {
+      const next = [...(prev ?? []), emptyRule()];
+      setOpenIdx(next.length - 1); // open the new rule for editing
+      return next;
+    });
+    touch();
   }
 
-  async function onPreview() {
-    if (rules === null) return;
-    setBusy(true);
-    setError(null);
-    setSaved(false);
-    try {
-      const res = await api.previewRules(rules);
-      setPreview(res.created);
-    } catch (e: unknown) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const preview = previewM.data?.created ?? null;
 
-  async function onSave() {
-    if (rules === null) return;
-    setBusy(true);
-    setError(null);
-    setSaved(false);
-    try {
-      const res = await api.putRules(rules);
-      setRules(res.rules);
-      setSaved(true);
-    } catch (e: unknown) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (rules === null && error === null) {
+  if (draft === null && error === null) {
     return (
       <div className="view">
         <p className="muted">Loading rules…</p>
@@ -346,24 +378,30 @@ export function Rules() {
     );
   }
 
+  const rules = draft ?? [];
+
   return (
     <div className="view">
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       <h1>Recurring rules</h1>
       {saved && <p className="rule-saved">Saved.</p>}
 
-      {rules !== null && rules.length === 0 && (
+      {rules.length === 0 && (
         <p className="muted">No rules yet. Add one below.</p>
       )}
 
-      {(rules ?? []).map((rule, i) => (
-        <RuleCard
-          key={i}
-          rule={rule}
-          onChange={(next) => update(i, next)}
-          onRemove={() => remove(i)}
-        />
-      ))}
+      <div className="rule-list">
+        {rules.map((rule, i) => (
+          <RuleItem
+            key={i}
+            rule={rule}
+            open={openIdx === i}
+            onToggle={() => setOpenIdx((cur) => (cur === i ? null : i))}
+            onChange={(next) => update(i, next)}
+            onRemove={() => remove(i)}
+          />
+        ))}
+      </div>
 
       <div className="actions">
         <button type="button" onClick={add} disabled={busy}>
@@ -371,7 +409,7 @@ export function Rules() {
         </button>
         <button
           type="button"
-          onClick={() => void onPreview()}
+          onClick={() => previewM.mutate(rules)}
           disabled={busy}
         >
           Preview
@@ -379,7 +417,7 @@ export function Rules() {
         <button
           type="button"
           className="rule-save"
-          onClick={() => void onSave()}
+          onClick={() => saveM.mutate(rules)}
           disabled={busy}
         >
           Save
