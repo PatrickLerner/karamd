@@ -82,7 +82,7 @@ function RuleFields({
             type="text"
             value={rule.key}
             onChange={(e) => set({ key: e.target.value })}
-            placeholder="rotate-backups"
+            placeholder="e.g. rotate-backups"
           />
         </label>
         <label>
@@ -105,7 +105,7 @@ function RuleFields({
           type="text"
           value={rule.title}
           onChange={(e) => set({ title: e.target.value })}
-          placeholder="Rotate vault backups"
+          placeholder="e.g. Rotate vault backups"
         />
       </label>
 
@@ -117,7 +117,7 @@ function RuleFields({
             min={1}
             value={rule.every_days ?? ""}
             onChange={(e) => set({ every_days: num(e.target.value) })}
-            placeholder="30"
+            placeholder="e.g. 30"
           />
         </label>
       )}
@@ -130,7 +130,7 @@ function RuleFields({
               type="text"
               value={rule.annual ?? ""}
               onChange={(e) => set({ annual: e.target.value })}
-              placeholder="12-24"
+              placeholder="e.g. 12-24"
             />
           </label>
           <label>
@@ -140,7 +140,7 @@ function RuleFields({
               min={0}
               value={rule.lead_days ?? ""}
               onChange={(e) => set({ lead_days: num(e.target.value) })}
-              placeholder="7"
+              placeholder="e.g. 7"
             />
           </label>
         </div>
@@ -156,7 +156,7 @@ function RuleFields({
               max={31}
               value={rule.day_of_month ?? ""}
               onChange={(e) => set({ day_of_month: num(e.target.value) })}
-              placeholder="1"
+              placeholder="e.g. 1"
             />
           </label>
           <label>
@@ -167,7 +167,7 @@ function RuleFields({
               max={27}
               value={rule.lead_days ?? ""}
               onChange={(e) => set({ lead_days: num(e.target.value) })}
-              placeholder="3"
+              placeholder="e.g. 3"
             />
           </label>
         </div>
@@ -202,7 +202,7 @@ function RuleFields({
                 phase: e.target.value === "" ? undefined : e.target.value,
               })
             }
-            placeholder="next"
+            placeholder="e.g. next"
           />
         </label>
       </div>
@@ -216,7 +216,7 @@ function RuleFields({
             const list = splitList(e.target.value);
             set({ tags: list.length > 0 ? list : undefined });
           }}
-          placeholder="ops, backups"
+          placeholder="e.g. ops, backups"
         />
       </label>
 

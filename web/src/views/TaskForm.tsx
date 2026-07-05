@@ -195,7 +195,7 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
             type="text"
             value={tags}
             onChange={(e) => setTags(e.target.value)}
-            placeholder="cli, config"
+            placeholder="e.g. cli, config"
           />
         </label>
         <label>
@@ -204,7 +204,7 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
             type="text"
             value={dependencies}
             onChange={(e) => setDependencies(e.target.value)}
-            placeholder="008, 011"
+            placeholder="e.g. 008, 011"
           />
         </label>
         <label>
