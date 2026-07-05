@@ -30,19 +30,19 @@
       prebuilt = {
         "x86_64-linux" = {
           target = "x86_64-unknown-linux-musl";
-          hash = "sha256-hYs8SjWfY7CCGTNflSEBOSw0DrHSDEdIcsJ8LEDCZBw=";
+          hash = "sha256-8rDxU6hJeAkQZFQgYKWjBpma6qJzEjJF+YIL0eh3tk4=";
         };
         "aarch64-linux" = {
           target = "aarch64-unknown-linux-musl";
-          hash = "sha256-5SbJglUiD3mvImEqknaNUnl3Y3f9fr/sBMwytfbZZAU=";
+          hash = "sha256-mcnDdAlWzVhTiiZ6z9j9hLSbzT1Tlx4PwSy2oSbTutg=";
         };
         "x86_64-darwin" = {
           target = "x86_64-apple-darwin";
-          hash = "sha256-/DveSA45ZELgF9pB+kVBzMRbO3wYZ9S4gOO7iQy9z1I=";
+          hash = "sha256-u8GF3NsYOaUNocKOWAZT48reXVOEp62lwUbHRVgQzzQ=";
         };
         "aarch64-darwin" = {
           target = "aarch64-apple-darwin";
-          hash = "sha256-RRMmrr9mL7f1IJwYTXRFiaXeYg7DR7LPa6gYLSMCLl4=";
+          hash = "sha256-coYwxFs4p9Jr8ePtI7dcUWcVQqvQIae09TOHzgaoeVk=";
         };
       };
 
@@ -101,7 +101,7 @@
             {
               src = final.fetchurl {
                 url = "https://github.com/PatrickLerner/karamd/releases/download/v${version}/karamd-web-dist.tar.gz";
-                hash = "sha256-0RObl+/lMSkeQeTCwnLJaCMJMznl8ldprmTO/jlA2hY=";
+                hash = "sha256-Mkoz+vMRaFyuNOcdi50JJqBWFzLQ6t3lGF0k9BEdvwo=";
               };
               nativeBuildInputs = [ final.gnutar final.gzip ];
             }

@@ -1,12 +1,13 @@
 ---
 id: '029'
 title: Update Nix prebuilt hashes for the v0.3.0 release assets
-status: pending
+status: completed
 created_at: 2026-07-05
 type: chore
 tags:
 - nix
 - release
+completed_at: 2026-07-05
 ---
 
 ## Context
