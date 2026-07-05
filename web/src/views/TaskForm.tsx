@@ -1,4 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { api, errorMessage } from "../api";
 import { ErrorBanner } from "../components/Banner";
 import { navigate, taskHref, tabHref } from "../router";
@@ -6,8 +11,8 @@ import {
   EFFORTS,
   PRIORITIES,
   TASK_TYPES,
-  type Phase,
   type TaskCreate,
+  type TaskDetail,
   type TaskPatch,
 } from "../types";
 
@@ -20,10 +25,8 @@ function splitList(input: string): string[] {
 
 export function TaskForm({ id, tab }: { id?: string; tab: string }) {
   const editing = id !== undefined;
-  const [phases, setPhases] = useState<Phase[]>([]);
-  const [loading, setLoading] = useState(editing);
+  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState("");
@@ -35,44 +38,56 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
   const [dependencies, setDependencies] = useState("");
   const [body, setBody] = useState("");
 
-  useEffect(() => {
-    api
-      .config()
-      .then((c) => setPhases(c.phases))
-      .catch(() => {});
-  }, []);
+  const configQ = useQuery({ queryKey: ["config"], queryFn: () => api.config() });
+  const phases = configQ.data?.phases ?? [];
 
-  useEffect(() => {
-    if (id === undefined) return;
-    api
-      .task(id)
-      .then((t) => {
-        setTitle(t.title);
-        setPriority(t.priority);
-        setEffort(t.effort ?? "");
-        setType(t.type ?? "");
-        setPhase(t.phase ?? "");
-        setDue(t.due ?? "");
-        setTags(t.tags.join(", "));
-        setDependencies(t.dependencies.join(", "));
-        setBody(t.body);
-        setLoading(false);
-      })
-      .catch((e: unknown) => {
-        setError(errorMessage(e));
-        setLoading(false);
-      });
-  }, [id]);
+  const taskQ = useQuery({
+    queryKey: ["task", id],
+    queryFn: () => api.task(id as string),
+    enabled: editing,
+  });
+  const loading = editing && taskQ.isPending;
 
-  async function onSubmit(e: FormEvent) {
+  // Seed the form from the loaded task once it arrives.
+  useEffect(() => {
+    const t = taskQ.data;
+    if (!t) return;
+    setTitle(t.title);
+    setPriority(t.priority);
+    setEffort(t.effort ?? "");
+    setType(t.type ?? "");
+    setPhase(t.phase ?? "");
+    setDue(t.due ?? "");
+    setTags(t.tags.join(", "));
+    setDependencies(t.dependencies.join(", "));
+    setBody(t.body);
+  }, [taskQ.data]);
+
+  const mutation = useMutation({
+    mutationFn: (common: TaskCreate & TaskPatch): Promise<TaskDetail> =>
+      id !== undefined
+        ? api.patchTask(id, common satisfies TaskPatch)
+        : api.createTask(common satisfies TaskCreate),
+    onSuccess: (task: TaskDetail) => {
+      // The list and ranking depend on this write; refresh both, plus the
+      // task's own detail cache, then show the saved task.
+      queryClient.setQueryData(["task", task.id], task);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["next"] });
+      navigate(taskHref(tab, task.id).replace(/^#/, ""));
+    },
+    onError: (err: unknown) => setError(errorMessage(err)),
+  });
+  const busy = mutation.isPending;
+
+  function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (title.trim() === "") {
       setError("Title is required");
       return;
     }
-    setBusy(true);
     setError(null);
-    const common = {
+    mutation.mutate({
       title: title.trim(),
       ...(priority !== "" && { priority }),
       ...(effort !== "" && { effort }),
@@ -82,17 +97,13 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
       tags: splitList(tags),
       dependencies: splitList(dependencies),
       body,
-    };
-    try {
-      const task = editing
-        ? await api.patchTask(id, common satisfies TaskPatch)
-        : await api.createTask(common satisfies TaskCreate);
-      navigate(taskHref(tab, task.id).replace(/^#/, ""));
-    } catch (err: unknown) {
-      setError(errorMessage(err));
-      setBusy(false);
-    }
+    });
   }
+
+  // A failed load of the task being edited surfaces as an error too.
+  useEffect(() => {
+    if (taskQ.error) setError(errorMessage(taskQ.error));
+  }, [taskQ.error]);
 
   if (loading) {
     return (

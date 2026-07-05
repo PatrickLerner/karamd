@@ -1,4 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { api, errorMessage } from "../api";
 import { ErrorBanner } from "../components/Banner";
 import { PriorityChip, StatusChip } from "../components/Chip";
@@ -70,40 +75,38 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export function Detail({ id, tab }: { id: string; tab: string }) {
-  const [task, setTask] = useState<Task | null>(null);
-  const [workflow, setWorkflow] = useState<Workflow>("solo");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const queryClient = useQueryClient();
+  const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => {
-    setTask(null);
-    setError(null);
-    api
-      .task(id)
-      .then(setTask)
-      .catch((e: unknown) => setError(errorMessage(e)));
-    api
-      .config()
-      .then((c) => setWorkflow(c.workflow))
-      .catch(() => {});
-  }, [id]);
+  const taskQ = useQuery({
+    queryKey: ["task", id],
+    queryFn: () => api.task(id),
+  });
+  const configQ = useQuery({ queryKey: ["config"], queryFn: () => api.config() });
+  const workflow: Workflow = configQ.data?.workflow ?? "solo";
 
-  async function apply(to: Status) {
-    setBusy(true);
-    setError(null);
-    try {
-      setTask(await api.setStatus(id, to));
-    } catch (e: unknown) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const mutation = useMutation({
+    mutationFn: (to: Status) => api.setStatus(id, to),
+    onMutate: () => setDismissed(false),
+    onSuccess: (updated: Task) => {
+      // Refresh this task and invalidate the shared list/ranking so a
+      // completed task drops out of the list immediately.
+      queryClient.setQueryData(["task", id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["next"] });
+    },
+  });
+
+  const task = taskQ.data ?? null;
+  const busy = mutation.isPending;
+  const errorSource = mutation.error ?? (task === null ? taskQ.error : null);
+  const error = dismissed ? null : errorSource ? errorMessage(errorSource) : null;
+  const apply = (to: Status) => mutation.mutate(to);
 
   if (error && task === null) {
     return (
       <div className="view">
-        <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        <ErrorBanner message={error} onDismiss={() => setDismissed(true)} />
       </div>
     );
   }
@@ -124,7 +127,9 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
 
   return (
     <div className="view">
-      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {error && (
+        <ErrorBanner message={error} onDismiss={() => setDismissed(true)} />
+      )}
       <p className="task-id detail-id">{task.id}</p>
       <h1>{stripWikiLinks(task.title)}</h1>
       <p className="detail-chips">

@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { api, errorMessage } from "./api";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
@@ -62,13 +68,34 @@ function App() {
   const route = useRoute();
   const date = useMemo(today, []);
 
-  const [config, setConfig] = useState<Config>({ phases: [], workflow: "solo" });
-  const [tasks, setTasks] = useState<TaskSummary[] | null>(null);
-  const [invalid, setInvalid] = useState<InvalidTask[]>([]);
-  const [rankById, setRankById] = useState<Map<string, number>>(new Map());
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Server state lives in the query cache; mutations (in Detail/TaskForm)
+  // invalidate these keys so the list and counts refresh without a reload.
+  const configQ = useQuery({ queryKey: ["config"], queryFn: () => api.config() });
+  const tasksQ = useQuery({ queryKey: ["tasks"], queryFn: () => api.tasks() });
+  const nextQ = useQuery({ queryKey: ["next"], queryFn: () => api.next(1000) });
+  const sessionsQ = useQuery({
+    queryKey: ["sessions"],
+    queryFn: () => api.sessions(),
+    refetchInterval: 3000,
+  });
+
+  const config: Config = configQ.data ?? { phases: [], workflow: "solo" };
+  const tasks: TaskSummary[] | null = tasksQ.data?.tasks ?? null;
+  const invalid: InvalidTask[] = tasksQ.data?.invalid ?? [];
+  const sessions: SessionInfo[] = sessionsQ.data ?? [];
+  const rankById = useMemo(
+    () => new Map((nextQ.data ?? []).map((n: NextItem) => [n.id, n.rank])),
+    [nextQ.data],
+  );
+
+  // Surface a task-fetch failure once; the banner stays dismissable.
+  useEffect(() => {
+    if (tasksQ.error) setError(errorMessage(tasksQ.error));
+  }, [tasksQ.error]);
 
   const tabs = useMemo(() => buildTabs(config, tasks ?? []), [config, tasks]);
 
@@ -83,49 +110,6 @@ function App() {
     const fallback = tabs.find((t) => t.key === DEFAULT_TAB) ?? tabs[0];
     navigate(tabHref(tabSlug(fallback.key)));
   }, [tabs, activeTab]);
-
-  useEffect(() => {
-    api.config().then(setConfig).catch(() => {});
-  }, []);
-
-  // Tasks + ranks refresh on every navigation, so the list reflects edits and
-  // status changes made in the detail pane. Cheap against a local vault.
-  const routeKey = `${route.tab}|${route.pane.kind}|${
-    "id" in route.pane ? route.pane.id : ""
-  }`;
-  useEffect(() => {
-    api
-      .tasks()
-      .then((r) => {
-        setTasks(r.tasks);
-        setInvalid(r.invalid);
-      })
-      .catch((e: unknown) => setError(errorMessage(e)));
-    api
-      .next(1000)
-      .then((items: NextItem[]) =>
-        setRankById(new Map(items.map((n) => [n.id, n.rank]))),
-      )
-      .catch(() => {});
-  }, [routeKey]);
-
-  // Sessions poll so the sidebar dot flips live -> exited without a reload.
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      api
-        .sessions()
-        .then((s) => {
-          if (alive) setSessions(s);
-        })
-        .catch(() => {});
-    load();
-    const timer = setInterval(load, 3000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
 
   const counts = useMemo(() => {
     const list = tasks ?? [];
@@ -142,10 +126,7 @@ function App() {
 
   async function killSession(id: string) {
     await api.killSession(id).catch(() => {});
-    api
-      .sessions()
-      .then(setSessions)
-      .catch(() => {});
+    void queryClient.invalidateQueries({ queryKey: ["sessions"] });
   }
 
   return (
@@ -202,5 +183,12 @@ function App() {
   );
 }
 
+const queryClient = new QueryClient();
+
 const root = document.getElementById("root");
-if (root) createRoot(root).render(<App />);
+if (root)
+  createRoot(root).render(
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>,
+  );
