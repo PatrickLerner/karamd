@@ -4,6 +4,41 @@ All notable changes to karamd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-05
+
+### Added
+
+- First-class `due` date (`YYYY-MM-DD`): settable via `create --due` /
+  `edit --due` and the web UI, shown in the detail view, and enforced
+  (`validate` flags a malformed `due`; an empty string clears it). Every other
+  unmodelled frontmatter field keeps round-tripping verbatim across all writes.
+- `edit` verb: set any non-status field in place
+  (`--title`/`--priority`/`--effort`/`--type`/`--phase`/`--due`/`--owner`/
+  `--tag`/`--depends-on`/`--body`). An empty string clears a clearable field;
+  terminal timestamps are never touched; dependency existence and cycles are
+  checked up front.
+- `open` query filter (`open:true`/`open:false`): match tasks whose status is
+  not terminal (neither `completed` nor `cancelled`), so
+  `karamd list 'open:true'` is the quick "still on my plate" view.
+
+### Changed
+
+- Web UI moved to TanStack Query for server state; status changes and edits
+  invalidate the task list and counts so they update immediately without a
+  reload.
+- Recurring-rules web view redesigned as a collapsible list (compact rows, click
+  a rule to edit it) instead of every rule rendered as an expanded form.
+- Form placeholders show example values prefixed with `e.g.` and render clearly
+  fainter than entered text.
+
+### Fixed
+
+- Web UI: completing or cancelling a task in the detail pane left it stale in the
+  list and sidebar counts; it now drops out immediately.
+- Web UI: the Today tab's group order was unstable (Ongoing sometimes rendered
+  below This week); it is now deterministic regardless of the server's phase
+  config.
+
 ## [0.2.0] - 2026-07-03
 
 ### Added
@@ -76,6 +111,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   triggers, idempotent creation via a `recurring:` frontmatter marker, `--dry-run`
   and `--today` overrides, Nix flake, and CI.
 
+[0.3.0]: https://github.com/PatrickLerner/karamd/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PatrickLerner/karamd/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/PatrickLerner/karamd/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/PatrickLerner/karamd/compare/v0.1.0...v0.1.1
