@@ -30,6 +30,7 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
   const [effort, setEffort] = useState("");
   const [type, setType] = useState("");
   const [phase, setPhase] = useState("");
+  const [due, setDue] = useState("");
   const [tags, setTags] = useState("");
   const [dependencies, setDependencies] = useState("");
   const [body, setBody] = useState("");
@@ -51,6 +52,7 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
         setEffort(t.effort ?? "");
         setType(t.type ?? "");
         setPhase(t.phase ?? "");
+        setDue(t.due ?? "");
         setTags(t.tags.join(", "));
         setDependencies(t.dependencies.join(", "));
         setBody(t.body);
@@ -76,6 +78,7 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
       ...(effort !== "" && { effort }),
       ...(type !== "" && { type }),
       phase: phase === "" ? null : phase,
+      due: due === "" ? null : due,
       tags: splitList(tags),
       dependencies: splitList(dependencies),
       body,
@@ -167,6 +170,14 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
             </select>
           </label>
         </div>
+        <label>
+          Due date
+          <input
+            type="date"
+            value={due}
+            onChange={(e) => setDue(e.target.value)}
+          />
+        </label>
         <label>
           Tags (comma-separated)
           <input

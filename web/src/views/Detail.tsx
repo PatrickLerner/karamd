@@ -158,6 +158,7 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
         <Field label="effort">{task.effort}</Field>
         <Field label="type">{task.type}</Field>
         <Field label="phase">{task.phase}</Field>
+        <Field label="due">{task.due}</Field>
         <Field label="tags">
           {task.tags.length > 0 ? task.tags.join(", ") : null}
         </Field>

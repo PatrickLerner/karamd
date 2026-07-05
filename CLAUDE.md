@@ -51,6 +51,9 @@ Split into a library crate (all logic, unit-testable) plus a thin binary:
     mapping, so unknown fields round-trip untouched. Spec enums (`completed`,
     not `done`; hyphenated `in-progress`/`in-review`). Auto set/clear of
     `completed_at`/`cancelled_at` on status change. `created` alias accepted.
+    First-class `due` (YYYY-MM-DD target date): `due_raw`/`due`/`set_due`,
+    settable via `create`/`edit`/web, `YYYY-MM-DD` enforced by `validate` and the
+    verbs; every other unmodelled field is preserved verbatim across all writes.
   - `store.rs` — `Vault`: recursive scan (dir-derived groups; non-task files
     ignored, broken task files reported separately), atomic saves, collision-
     safe `create`, re-reading `update`. Entropy is injectable (`Entropy` trait)
@@ -60,7 +63,8 @@ Split into a library crate (all logic, unit-testable) plus a thin binary:
     count/depth, cycle + dangling detection, `parent` hierarchy validation
     (exists / no self-ref / no cycles).
 - CLI verbs + views over the library: `src/verbs.rs` (create/edit/list/show/
-  status/complete/search), `src/query.rs` (the `list` mini-grammar), `src/next.rs`
+  status/complete/search), `src/query.rs` (the `list` mini-grammar, incl. the
+  `open:` filter = status not terminal), `src/next.rs`
   (taskmd-parity ranking), `src/validate.rs` (spec lint), `src/analyze.rs`
   (`graph` DOT + `stats`), `src/output.rs` (one `TaskView` behind human/JSON/YAML).
 - Web (#009/#013): `src/web.rs` — axum JSON API over the library (`karamd web`,

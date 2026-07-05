@@ -510,6 +510,7 @@ h3 {
 
 .filter-bar input[type="search"]::placeholder {
   color: var(--base1);
+  opacity: 0.6;
 }
 
 .status-filters {
@@ -808,6 +809,14 @@ h3 {
 .task-form textarea {
   resize: vertical;
   line-height: 1.5;
+}
+
+/* Placeholders read clearly fainter than entered text (which is base01), so
+   hint copy is never mistaken for a real value. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--base1);
+  opacity: 0.6;
 }
 
 .form-row {

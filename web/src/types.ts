@@ -38,6 +38,7 @@ export interface TaskSummary {
   effort: Effort | null;
   type: TaskType | null;
   phase: string | null;
+  due: string | null;
   tags: string[];
   dependencies: string[];
   group: string | null;
@@ -93,6 +94,7 @@ export interface TaskCreate {
   effort?: string;
   type?: string;
   phase?: string | null;
+  due?: string | null;
   tags?: string[];
   dependencies?: string[];
   body?: string;
@@ -104,6 +106,7 @@ export type TaskPatch = Partial<{
   effort: string;
   type: string;
   phase: string | null;
+  due: string | null;
   tags: string[];
   dependencies: string[];
   owner: string | null;

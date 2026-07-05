@@ -13,8 +13,9 @@
 //! Fields: `status`, `priority`, `effort`, `type`, `phase`, `tag`, `owner`,
 //! `group`, `scope` (matches `touches`), `id`, `title` (substring,
 //! case-insensitive), `depends` (has that id as dependency), `ready`
-//! (true/false, from the dependency graph), and the dates `created`,
-//! `completed`, `cancelled`. Ordering operators work on `priority`, `effort`
+//! (true/false, from the dependency graph), `open` (true/false: status is not
+//! terminal, i.e. neither `completed` nor `cancelled`), and the dates
+//! `created`, `completed`, `cancelled`. Ordering operators work on `priority`, `effort`
 //! (their enum order) and the date fields; everything else is `:` only.
 //! `AND`/`OR`/`NOT` are case-insensitive; a hand-rolled recursive-descent
 //! parser keeps the dependency set at zero.
@@ -55,6 +56,7 @@ pub enum Field {
     Title,
     Depends,
     Ready,
+    Open,
     Created,
     Completed,
     Cancelled,
@@ -76,6 +78,7 @@ impl Field {
             "title" => Field::Title,
             "depends" => Field::Depends,
             "ready" => Field::Ready,
+            "open" => Field::Open,
             "created" | "created_at" => Field::Created,
             "completed" | "completed_at" => Field::Completed,
             "cancelled" | "cancelled_at" => Field::Cancelled,
@@ -175,8 +178,8 @@ fn classify(word: &str) -> Result<Token> {
             let Some(field) = Field::parse(field_str) else {
                 bail!(
                     "unknown field `{field_str}` (fields: status, priority, effort, type, phase, \
-                     tag, owner, group, scope, id, title, depends, ready, created, completed, \
-                     cancelled)"
+                     tag, owner, group, scope, id, title, depends, ready, open, created, \
+                     completed, cancelled)"
                 );
             };
             if value.is_empty() {
@@ -214,6 +217,9 @@ fn validate_value(field: Field, value: &str) -> Result<()> {
         }
         Field::Ready if !matches!(value, "true" | "false") => {
             bail!("`ready` takes true or false")
+        }
+        Field::Open if !matches!(value, "true" | "false") => {
+            bail!("`open` takes true or false")
         }
         Field::Created | Field::Completed | Field::Cancelled
             if NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() =>
@@ -332,6 +338,9 @@ fn eval_term(term: &Term, task: &Task, ctx: &EvalCtx) -> bool {
         Field::Title => task.title().to_lowercase().contains(&v.to_lowercase()),
         Field::Depends => task.dependencies().iter().any(|d| d == v),
         Field::Ready => ctx.ready == (v == "true"),
+        // open == !terminal; `terminal != wanted` is the de-negated form of
+        // `(!terminal) == wanted`.
+        Field::Open => task.effective_status().is_terminal() != (v == "true"),
         Field::Created => date_matches(term.op, task.created_at(), v),
         Field::Completed => date_matches(term.op, task.completed_at(), v),
         Field::Cancelled => date_matches(term.op, task.cancelled_at(), v),
@@ -440,6 +449,25 @@ created_at: 2026-02-08
     }
 
     #[test]
+    fn open_matches_non_terminal_status() {
+        // T is in-progress: open.
+        assert!(matches("open:true", T));
+        assert!(!matches("open:false", T));
+        // Missing status defaults to pending: open.
+        let bare = "id: \"1\"\ntitle: t";
+        assert!(matches("open:true", bare));
+        // Terminal states are not open.
+        let done = "id: \"1\"\ntitle: t\nstatus: completed";
+        assert!(!matches("open:true", done));
+        assert!(matches("open:false", done));
+        let gone = "id: \"1\"\ntitle: t\nstatus: cancelled";
+        assert!(!matches("open:true", gone));
+        assert!(matches("open:false", gone));
+        // Composes with other terms.
+        assert!(matches("open:true AND tag:auth", T));
+    }
+
+    #[test]
     fn date_comparisons() {
         assert!(matches("created:2026-02-08", T));
         assert!(matches("created>=2026-01-01", T));
@@ -505,6 +533,7 @@ created_at: 2026-02-08
             ("effort:epic", "invalid effort"),
             ("type:story", "invalid type"),
             ("ready:maybe", "`ready` takes true or false"),
+            ("open:maybe", "`open` takes true or false"),
             ("created:tomorrow", "invalid date"),
             ("title>=x", "only supports `:`"),
             ("status>pending", "only supports `:`"),

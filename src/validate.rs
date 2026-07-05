@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
+use chrono::NaiveDate;
 use serde::Serialize;
 
 use crate::taskmd::{Effort, Graph, GraphIssue, Priority, Status, Task, TaskType, Vault};
@@ -133,6 +134,11 @@ pub fn validate(root: &Path) -> Result<Report> {
             findings.push(err(format!(
                 "invalid type `{raw}` (feature, bug, improvement, chore, docs)"
             )));
+        }
+        if let Some(raw) = task.due_raw()
+            && NaiveDate::parse_from_str(&raw, "%Y-%m-%d").is_err()
+        {
+            findings.push(err(format!("invalid due `{raw}` (need YYYY-MM-DD)")));
         }
 
         // Warnings.
@@ -328,6 +334,26 @@ mod tests {
         assert!(errs[1].contains("invalid priority `urgent`"));
         assert!(errs[2].contains("invalid effort `epic`"));
         assert!(errs[3].contains("invalid type `story`"));
+    }
+
+    #[test]
+    fn invalid_due_is_an_error() {
+        let root = tempdir();
+        // 001 has a malformed due (error); 002 has a well-formed due (clean).
+        write(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: A\ndue: someday\ncreated_at: 2026-07-01\n---\n",
+        );
+        write(
+            &root,
+            "002-b.md",
+            "---\nid: \"002\"\ntitle: B\ndue: 2026-08-01\ncreated_at: 2026-07-01\n---\n",
+        );
+        let errs = messages(&validate(&root).unwrap(), Severity::Error);
+        assert!(errs.iter().any(|m| m.contains("invalid due `someday`")));
+        // The well-formed date never produces a due error.
+        assert!(!errs.iter().any(|m| m.contains("invalid due `2026-08-01`")));
     }
 
     #[test]

@@ -22,10 +22,18 @@ pub struct CreateSpec {
     pub effort: Option<String>,
     pub task_type: Option<String>,
     pub phase: Option<String>,
+    pub due: Option<String>,
     pub tags: Vec<String>,
     pub dependencies: Vec<String>,
     pub template: Option<String>,
     pub body: Option<String>,
+}
+
+/// Validate the `due` field's `YYYY-MM-DD` shape before any file is written.
+fn check_due(due: &str) -> Result<()> {
+    NaiveDate::parse_from_str(due, "%Y-%m-%d")
+        .map(|_| ())
+        .with_context(|| format!("invalid due `{due}` (need YYYY-MM-DD)"))
 }
 
 /// Create a new task file in the vault. Template defaults apply first,
@@ -60,6 +68,9 @@ pub fn create(
         .as_deref()
         .map(|name| template::resolve(root, name))
         .transpose()?;
+    if let Some(due) = spec.due.as_deref().filter(|d| !d.is_empty()) {
+        check_due(due)?;
+    }
 
     let vault = Vault::open(root)?;
 
@@ -89,6 +100,9 @@ pub fn create(
         if let Some(phase) = &spec.phase {
             t.set_phase(Some(phase));
         }
+        if let Some(due) = spec.due.as_deref().filter(|d| !d.is_empty()) {
+            t.set_due(Some(due));
+        }
         if !spec.tags.is_empty() {
             t.set_tags(&spec.tags);
         }
@@ -116,9 +130,27 @@ pub struct EditSpec {
     pub task_type: Option<String>,
     pub phase: Option<Option<String>>,
     pub owner: Option<Option<String>>,
+    pub due: Option<Option<String>>,
     pub tags: Option<Vec<String>>,
     pub dependencies: Option<Vec<String>>,
     pub body: Option<String>,
+}
+
+impl EditSpec {
+    /// True when no field would change (every option is `None`). The CLI uses
+    /// this to reject a no-op `edit` invocation.
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.priority.is_none()
+            && self.effort.is_none()
+            && self.task_type.is_none()
+            && self.phase.is_none()
+            && self.owner.is_none()
+            && self.due.is_none()
+            && self.tags.is_none()
+            && self.dependencies.is_none()
+            && self.body.is_none()
+    }
 }
 
 /// Apply a partial edit to an existing task. Enum-valued inputs and dependency
@@ -146,6 +178,9 @@ pub fn edit(root: &Path, id: &str, spec: &EditSpec) -> Result<TaskView> {
         .as_deref()
         .map(|t| TaskType::parse(t).with_context(|| format!("invalid type `{t}`")))
         .transpose()?;
+    if let Some(Some(due)) = &spec.due {
+        check_due(due)?;
+    }
 
     let vault = Vault::open(root)?;
 
@@ -181,6 +216,9 @@ pub fn edit(root: &Path, id: &str, spec: &EditSpec) -> Result<TaskView> {
         }
         if let Some(owner) = &spec.owner {
             t.set_owner(owner.as_deref());
+        }
+        if let Some(due) = &spec.due {
+            t.set_due(due.as_deref());
         }
         if let Some(tags) = &spec.tags {
             t.set_tags(tags);
@@ -364,6 +402,7 @@ mod tests {
             effort: Some("small".into()),
             task_type: Some("bug".into()),
             phase: Some("v1".into()),
+            due: Some("2026-08-01".into()),
             tags: vec!["a".into(), "b".into()],
             dependencies: vec!["001".into()],
             template: None,
@@ -375,6 +414,7 @@ mod tests {
         assert_eq!(v.effort.as_deref(), Some("small"));
         assert_eq!(v.task_type.as_deref(), Some("bug"));
         assert_eq!(v.phase.as_deref(), Some("v1"));
+        assert_eq!(v.due.as_deref(), Some("2026-08-01"));
         assert_eq!(v.tags, vec!["a", "b"]);
         assert_eq!(v.dependencies, vec!["001"]);
         assert!(v.ready); // dep is completed
@@ -382,7 +422,25 @@ mod tests {
         // On-disk file is taskmd-parseable with the right frontmatter.
         let raw = fs::read_to_string(root.join("tasks/002-full.md")).unwrap();
         assert!(raw.contains("priority: critical"));
+        assert!(raw.contains("due: 2026-08-01"));
         assert!(raw.contains("dependencies:"));
+    }
+
+    #[test]
+    fn create_rejects_malformed_due() {
+        let root = tempdir();
+        let s = CreateSpec {
+            title: "Bad due".into(),
+            due: Some("someday".into()),
+            ..CreateSpec::default()
+        };
+        let err = create(&root, &s, day(2026, 7, 2), &mut FixedEntropy).unwrap_err();
+        assert!(err.to_string().contains("invalid due `someday`"));
+        // Nothing was written.
+        assert!(
+            !root.join("tasks").exists()
+                || fs::read_dir(root.join("tasks")).unwrap().next().is_none()
+        );
     }
 
     #[test]
@@ -619,6 +677,7 @@ mod tests {
             effort: Some("small".into()),
             task_type: Some("bug".into()),
             phase: Some(None), // clear phase
+            due: Some(Some("2026-08-01".into())),
             owner: Some(Some("me".into())),
             tags: Some(vec!["x".into()]),
             dependencies: Some(vec!["001".into()]),
@@ -630,11 +689,94 @@ mod tests {
         assert_eq!(v.effort.as_deref(), Some("small"));
         assert_eq!(v.task_type.as_deref(), Some("bug"));
         assert_eq!(v.phase, None);
+        assert_eq!(v.due.as_deref(), Some("2026-08-01"));
         assert_eq!(v.owner.as_deref(), Some("me"));
         assert_eq!(v.tags, vec!["x"]);
         assert_eq!(v.dependencies, vec!["001"]);
         assert!(v.ready); // dep completed
         assert!(v.body.as_deref().unwrap().contains("new body"));
+
+        // Clearing due removes the key; a malformed due is rejected.
+        let cleared = edit(
+            &root,
+            "002",
+            &EditSpec {
+                due: Some(None),
+                ..EditSpec::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cleared.due, None);
+        let err = edit(
+            &root,
+            "002",
+            &EditSpec {
+                due: Some(Some("nope".into())),
+                ..EditSpec::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid due `nope`"));
+    }
+
+    #[test]
+    fn edit_spec_is_empty_detects_no_op() {
+        assert!(EditSpec::default().is_empty());
+        assert!(
+            !EditSpec {
+                due: Some(None),
+                ..EditSpec::default()
+            }
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn edit_and_status_preserve_unknown_frontmatter_and_order() {
+        let root = tempdir();
+        // Custom keys karamd does not model, interleaved with known ones and in
+        // a deliberate order, plus a nested mapping.
+        write_task(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: A\ncustom_top: keepme\nstatus: pending\nnested_custom:\n  a: 1\n  b: 2\npriority: medium\nzz_trailing: last\n---\n\n# A\n\nbody\n",
+        );
+        let path = root.join("tasks/001-a.md");
+        let survives = |raw: &str| {
+            assert!(raw.contains("custom_top: keepme"), "custom_top lost: {raw}");
+            assert!(raw.contains("nested_custom:"), "nested_custom lost: {raw}");
+            assert!(
+                raw.contains("a: 1") && raw.contains("b: 2"),
+                "nested values lost"
+            );
+            assert!(raw.contains("zz_trailing: last"), "zz_trailing lost");
+            // Relative key order is preserved.
+            assert!(
+                raw.find("custom_top").unwrap() < raw.find("nested_custom").unwrap()
+                    && raw.find("nested_custom").unwrap() < raw.find("zz_trailing").unwrap(),
+                "key order not preserved: {raw}"
+            );
+        };
+
+        // A field edit preserves every unmodelled key.
+        edit(
+            &root,
+            "001",
+            &EditSpec {
+                priority: Some("high".into()),
+                ..EditSpec::default()
+            },
+        )
+        .unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("priority: high"));
+        survives(&raw);
+
+        // A status transition preserves them too.
+        set_status(&root, "001", Status::Completed, day(2026, 7, 4)).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("status: completed"));
+        survives(&raw);
     }
 
     #[test]

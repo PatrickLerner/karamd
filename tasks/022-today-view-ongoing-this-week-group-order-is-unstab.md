@@ -1,11 +1,14 @@
 ---
-title: "Today view: Ongoing/This week group order is unstable, Ongoing renders below"
-id: "022"
-status: pending
+title: 'Today view: Ongoing/This week group order is unstable, Ongoing renders below'
+id: '022'
+status: completed
 priority: medium
 type: bug
-tags: ["web", "ui"]
-created_at: "2026-07-03"
+tags:
+- web
+- ui
+created_at: 2026-07-03
+completed_at: 2026-07-05
 ---
 
 # Today view: Ongoing/This week group order is unstable, Ongoing renders below

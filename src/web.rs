@@ -97,6 +97,7 @@ struct SummaryOut {
     #[serde(rename = "type")]
     task_type: Option<String>,
     phase: Option<String>,
+    due: Option<String>,
     tags: Vec<String>,
     dependencies: Vec<String>,
     group: Option<String>,
@@ -120,6 +121,7 @@ impl From<&TaskView> for SummaryOut {
             effort: v.effort.clone(),
             task_type: v.task_type.clone(),
             phase: v.phase.clone(),
+            due: v.due.clone(),
             tags: v.tags.clone(),
             dependencies: v.dependencies.clone(),
             group: v.group.clone(),
@@ -209,6 +211,7 @@ struct CreateBody {
     #[serde(rename = "type")]
     task_type: Option<String>,
     phase: Option<String>,
+    due: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
@@ -225,6 +228,8 @@ struct PatchBody {
     task_type: Option<String>,
     #[serde(default, deserialize_with = "double_option")]
     phase: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    due: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
     owner: Option<Option<String>>,
     tags: Option<Vec<String>>,
@@ -283,6 +288,7 @@ async fn create_task(
         effort: body.effort,
         task_type: body.task_type,
         phase: body.phase,
+        due: body.due,
         tags: body.tags,
         dependencies: body.dependencies,
         template: None,
@@ -309,6 +315,7 @@ async fn patch_task(
         effort: body.effort,
         task_type: body.task_type,
         phase: body.phase,
+        due: body.due,
         owner: body.owner,
         tags: body.tags,
         dependencies: body.dependencies,
@@ -693,6 +700,7 @@ mod tests {
                 "title": "New thing",
                 "priority": "high",
                 "type": "bug",
+                "due": "2026-08-01",
                 "tags": ["x"],
                 "body": "the body"
             }),
@@ -702,6 +710,7 @@ mod tests {
         assert_eq!(body["id"], "001");
         assert_eq!(body["priority"], "high");
         assert_eq!(body["type"], "bug");
+        assert_eq!(body["due"], "2026-08-01");
         assert_eq!(body["body"], "the body");
         assert!(root.join("tasks/001-new-thing.md").exists());
     }
@@ -722,13 +731,23 @@ mod tests {
         let req = json_req(
             "PATCH",
             "/api/tasks/001",
-            serde_json::json!({ "title": "Renamed", "phase": null, "owner": "me" }),
+            serde_json::json!({ "title": "Renamed", "phase": null, "owner": "me", "due": "2026-08-01" }),
         );
         let (status, body) = call(&root, req).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["title"], "Renamed");
         assert!(body["phase"].is_null());
         assert_eq!(body["owner"], "me");
+        assert_eq!(body["due"], "2026-08-01");
+
+        // due can be cleared with an explicit null.
+        let req = json_req(
+            "PATCH",
+            "/api/tasks/001",
+            serde_json::json!({ "due": null }),
+        );
+        let (_, body) = call(&root, req).await;
+        assert!(body["due"].is_null());
     }
 
     #[tokio::test]

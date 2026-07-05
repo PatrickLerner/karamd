@@ -41,6 +41,9 @@ pub struct TaskView {
     pub task_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
+    /// Target date (`YYYY-MM-DD`), verbatim; may be malformed (validate flags it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due: Option<String>,
     pub tags: Vec<String>,
     pub dependencies: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +90,7 @@ impl TaskView {
             effort: task.effort_raw(),
             task_type: task.task_type_raw(),
             phase: task.phase(),
+            due: task.due_raw(),
             tags: task.tags(),
             dependencies: task.dependencies(),
             group: task.group(),
@@ -263,7 +267,7 @@ mod tests {
     #[test]
     fn view_maps_every_field() {
         let mut t = task(
-            "id: \"009\"\ntitle: Full\nstatus: completed\npriority: low\neffort: small\ntype: docs\nphase: v2\ntags: [x]\ndependencies: []\ngroup: g\nowner: o\nparent: \"001\"\ncreated_at: 2026-01-01\ncompleted_at: 2026-02-02\nrecurring: \"k\"",
+            "id: \"009\"\ntitle: Full\nstatus: completed\npriority: low\neffort: small\ntype: docs\nphase: v2\ndue: 2026-09-09\ntags: [x]\ndependencies: []\ngroup: g\nowner: o\nparent: \"001\"\ncreated_at: 2026-01-01\ncompleted_at: 2026-02-02\nrecurring: \"k\"",
         );
         t.rel_path = Some(std::path::PathBuf::from("009-full.md"));
         let binding = vec![t];
@@ -272,6 +276,7 @@ mod tests {
         assert_eq!(v.effort.as_deref(), Some("small"));
         assert_eq!(v.task_type.as_deref(), Some("docs"));
         assert_eq!(v.phase.as_deref(), Some("v2"));
+        assert_eq!(v.due.as_deref(), Some("2026-09-09"));
         assert_eq!(v.group.as_deref(), Some("g"));
         assert_eq!(v.owner.as_deref(), Some("o"));
         assert_eq!(v.parent.as_deref(), Some("001"));

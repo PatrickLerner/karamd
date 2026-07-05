@@ -1,11 +1,14 @@
 ---
-title: "Add an open shortcut to list for non-terminal tasks (not completed or cancelled)"
-id: "026"
-status: pending
+title: Add an open shortcut to list for non-terminal tasks (not completed or cancelled)
+id: '026'
+status: completed
 priority: medium
 type: feature
-tags: ["work", "core"]
-created_at: "2026-07-05"
+tags:
+- work
+- core
+created_at: 2026-07-05
+completed_at: 2026-07-05
 ---
 
 # Add an open shortcut to list for non-terminal tasks (not completed or cancelled)

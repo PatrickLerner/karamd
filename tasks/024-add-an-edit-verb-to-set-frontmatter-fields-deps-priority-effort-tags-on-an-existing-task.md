@@ -1,7 +1,7 @@
 ---
 id: '024'
 title: Add an 'edit' verb to set frontmatter fields (deps, priority, effort, tags) on an existing task
-status: pending
+status: completed
 created_at: 2026-07-04
 priority: medium
 type: feature
@@ -10,6 +10,7 @@ tags:
 - core
 dependencies:
 - '016'
+completed_at: 2026-07-05
 ---
 
 ## Objective

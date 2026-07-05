@@ -3,7 +3,7 @@ import { ErrorBanner } from "../components/Banner";
 import { PriorityChip, StatusChip } from "../components/Chip";
 import { stripWikiLinks } from "../markdown";
 import { taskHref } from "../router";
-import { DONE_TAB, tabSlug, taskInTab } from "../tabs";
+import { DONE_TAB, TODAY_PHASE_ORDER, tabSlug, taskInTab } from "../tabs";
 import type { InvalidTask, Phase, TaskSummary } from "../types";
 
 interface Group {
@@ -93,7 +93,19 @@ export function List({
       if (arr && arr.length > 0) out.push({ name: p.name, tasks: arr });
       byPhase.delete(p.id);
     }
-    for (const [key, arr] of byPhase) {
+    // Phases not present in the server config land here. Order them
+    // deterministically (the Today merge phases first, in their intended
+    // sequence; then any other phase alphabetically; "No phase" last) so the
+    // group order never depends on task/rank insertion order.
+    const rank = (key: string | null): number => {
+      if (key === null) return Number.MAX_SAFE_INTEGER;
+      const i = (TODAY_PHASE_ORDER as readonly string[]).indexOf(key);
+      return i === -1 ? 1_000_000 : i;
+    };
+    const leftover = [...byPhase.entries()].sort(
+      ([a], [b]) => rank(a) - rank(b) || String(a).localeCompare(String(b)),
+    );
+    for (const [key, arr] of leftover) {
       if (arr.length > 0) out.push({ name: key ?? "No phase", tasks: arr });
     }
     return out;

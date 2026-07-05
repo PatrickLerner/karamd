@@ -87,8 +87,11 @@ serializable model backs all formats).
 
 ```
 karamd create "Fix the flaky test" --priority high --type bug --tag ci
-karamd create "Ship feature" --template feature --depends-on 008,011
+karamd create "Ship feature" --template feature --depends-on 008,011 --due 2026-08-01
+karamd edit 012 --priority high --due 2026-08-01 --depends-on 008
+karamd edit 012 --due "" --phase ""      # empty string clears the field
 karamd list                              # table of all tasks
+karamd list 'open:true'                  # everything not completed/cancelled
 karamd list 'status:pending AND priority>=high'
 karamd show 012                          # full task incl. body
 karamd complete 012                      # solo: completed; pr-review: in-review
@@ -102,6 +105,11 @@ karamd status 014 in-progress            # full enum: pending, in-progress,
 - `create --template` knows taskmd's built-ins (`feature`, `bug`, `chore`,
   byte-matched against taskmd 0.2.5) and custom `.taskmd/templates/<name>.md`
   files (frontmatter = field defaults, body = task body).
+- `edit` sets any non-status field in place (`--title`/`--priority`/`--effort`/
+  `--type`/`--phase`/`--due`/`--owner`/`--tag`/`--depends-on`/`--body`); an empty
+  string clears the clearable fields, terminal timestamps are never touched, and
+  arbitrary/unknown frontmatter is preserved. Status still moves through
+  `complete`/`cancel`/`reopen`/`status`.
 - `complete` respects the `.taskmd.yaml` `workflow`: `solo` (default) sets
   `completed`; `pr-review` sets `in-review` and records `--pr`.
 - Status changes maintain `completed_at`/`cancelled_at` automatically (set on
@@ -175,7 +183,8 @@ values      := bare or "quoted string"   e.g. title:"user auth"
 Fields: `status`, `priority`, `effort`, `type`, `phase`, `tag`, `owner`,
 `group`, `scope` (matches `touches`), `id`, `title` (case-insensitive
 substring), `depends` (has that id as a dependency), `ready` (true/false: all
-dependencies completed), and the dates `created`, `completed`, `cancelled`
+dependencies completed), `open` (true/false: status is not `completed` or
+`cancelled`), and the dates `created`, `completed`, `cancelled`
 (`YYYY-MM-DD`). Missing `status` reads as `pending` and missing `priority` as
 `medium` (spec defaults); a typo in a field or enum value is a parse error, not
 an empty result.

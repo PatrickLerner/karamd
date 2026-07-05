@@ -1,11 +1,14 @@
 ---
-title: "Preserve arbitrary frontmatter across all writes and make due a first-class field in the web UI"
-id: "025"
-status: pending
+title: Preserve arbitrary frontmatter across all writes and make due a first-class field in the web UI
+id: '025'
+status: completed
 priority: medium
 type: feature
-tags: ["work", "core"]
-created_at: "2026-07-04"
+tags:
+- work
+- core
+created_at: 2026-07-04
+completed_at: 2026-07-05
 ---
 
 # Preserve arbitrary frontmatter across all writes and make due a first-class field in the web UI

@@ -445,6 +445,16 @@ impl Task {
         self.get("cancelled_at").and_then(value_date)
     }
 
+    /// The `due` target date, verbatim (may be malformed; `validate` flags it).
+    pub fn due_raw(&self) -> Option<String> {
+        self.get_str("due")
+    }
+
+    /// The `due` target date, parsed; `None` if absent or not `YYYY-MM-DD`.
+    pub fn due(&self) -> Option<NaiveDate> {
+        self.get("due").and_then(value_date)
+    }
+
     pub fn verify(&self) -> Vec<VerifyCheck> {
         let Some(Value::Sequence(seq)) = self.get("verify") else {
             return Vec::new();
@@ -530,6 +540,15 @@ impl Task {
         match owner {
             Some(o) => self.set("owner", Value::String(o.to_string())),
             None => self.remove("owner"),
+        }
+    }
+
+    /// Set (or clear, with `None`) the `due` target date. Stored verbatim;
+    /// callers validate the `YYYY-MM-DD` shape before writing.
+    pub fn set_due(&mut self, due: Option<&str>) {
+        match due {
+            Some(d) => self.set("due", Value::String(d.to_string())),
+            None => self.remove("due"),
         }
     }
 
@@ -939,6 +958,24 @@ Body text.
         assert!(!out.contains("phase:"));
         assert!(!out.contains("owner:"));
         assert!(!out.contains("parent:"));
+    }
+
+    #[test]
+    fn due_accessors_and_setter_round_trip() {
+        let mut t = Task::new("1", "t", day(2026, 7, 1));
+        assert_eq!(t.due_raw(), None);
+        assert_eq!(t.due(), None);
+        t.set_due(Some("2026-08-01"));
+        let t2 = Task::parse_required(&t.to_markdown()).unwrap();
+        assert_eq!(t2.due_raw().as_deref(), Some("2026-08-01"));
+        assert_eq!(t2.due(), Some(day(2026, 8, 1)));
+        // A malformed value survives verbatim but does not parse.
+        t.set_due(Some("not-a-date"));
+        assert_eq!(t.due_raw().as_deref(), Some("not-a-date"));
+        assert_eq!(t.due(), None);
+        // Clearing removes the key.
+        t.set_due(None);
+        assert!(!t.to_markdown().contains("due:"));
     }
 
     #[test]

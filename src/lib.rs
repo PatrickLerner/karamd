@@ -125,6 +125,9 @@ enum Commands {
         /// Phase name (should match a configured phase id).
         #[arg(long)]
         phase: Option<String>,
+        /// Target date (YYYY-MM-DD).
+        #[arg(long)]
+        due: Option<String>,
         /// Tag (repeatable).
         #[arg(long = "tag")]
         tags: Vec<String>,
@@ -140,6 +143,45 @@ enum Commands {
         body: Option<String>,
         #[command(flatten)]
         today: TodayArg,
+        #[command(flatten)]
+        format: FormatArgs,
+    },
+    /// Edit an existing task's fields in place (not status; use `status`).
+    Edit {
+        /// Task id.
+        id: String,
+        #[command(flatten)]
+        vault: VaultArg,
+        /// New title.
+        #[arg(long)]
+        title: Option<String>,
+        /// Priority: low, medium, high, critical.
+        #[arg(long)]
+        priority: Option<String>,
+        /// Effort: small, medium, large.
+        #[arg(long)]
+        effort: Option<String>,
+        /// Type: feature, bug, improvement, chore, docs.
+        #[arg(long = "type")]
+        task_type: Option<String>,
+        /// Phase name; pass an empty string to clear it.
+        #[arg(long)]
+        phase: Option<String>,
+        /// Target date (YYYY-MM-DD); pass an empty string to clear it.
+        #[arg(long)]
+        due: Option<String>,
+        /// Owner; pass an empty string to clear it.
+        #[arg(long)]
+        owner: Option<String>,
+        /// Replace all tags (repeatable). Omit to leave tags unchanged.
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Replace dependencies (comma-separated ids). Omit to leave unchanged.
+        #[arg(long, value_delimiter = ',')]
+        depends_on: Option<Vec<String>>,
+        /// Replace the markdown body.
+        #[arg(long)]
+        body: Option<String>,
         #[command(flatten)]
         format: FormatArgs,
     },
@@ -478,6 +520,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
             effort,
             task_type,
             phase,
+            due,
             tags,
             depends_on,
             template,
@@ -491,6 +534,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
                 effort,
                 task_type,
                 phase,
+                due,
                 tags,
                 dependencies: depends_on,
                 template,
@@ -507,6 +551,46 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
                 view.id,
                 view.file.as_deref().unwrap_or("?")
             );
+            print_task(format.format(), &view, human)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Commands::Edit {
+            id,
+            vault,
+            title,
+            priority,
+            effort,
+            task_type,
+            phase,
+            due,
+            owner,
+            tags,
+            depends_on,
+            body,
+            format,
+        } => {
+            // An empty string clears the field; absence leaves it untouched.
+            let clearable = |v: Option<String>| v.map(|s| (!s.is_empty()).then_some(s));
+            let spec = verbs::EditSpec {
+                title,
+                priority,
+                effort,
+                task_type,
+                phase: clearable(phase),
+                due: clearable(due),
+                owner: clearable(owner),
+                // Repeatable `--tag`: any value replaces the set; none leaves it.
+                tags: (!tags.is_empty()).then_some(tags),
+                // `--depends-on ""` clears; a list replaces; absent leaves it.
+                dependencies: depends_on
+                    .map(|v| v.into_iter().filter(|s| !s.trim().is_empty()).collect()),
+                body,
+            };
+            if spec.is_empty() {
+                anyhow::bail!("edit: nothing to change (pass at least one field flag)");
+            }
+            let view = verbs::edit(&vault.vault, &id, &spec)?;
+            let human = format!("karamd: edited {}", view.id);
             print_task(format.format(), &view, human)?;
             Ok(ExitCode::SUCCESS)
         }
@@ -1235,6 +1319,77 @@ mod tests {
         let raw = fs::read_to_string(vault.join("tasks/001-bug-hunt.md")).unwrap();
         assert!(raw.contains("type: bug"));
         assert!(raw.contains("## Steps to Reproduce"));
+    }
+
+    #[test]
+    fn run_edit_e2e() {
+        let vault = tempdir();
+        fs::create_dir_all(vault.join("tasks")).unwrap();
+        // A dependency target and the task we edit (with a custom field).
+        fs::write(
+            vault.join("tasks/001-dep.md"),
+            "---\nid: \"001\"\ntitle: Dep\nstatus: completed\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            vault.join("tasks/002-a.md"),
+            "---\nid: \"002\"\ntitle: A\nstatus: pending\nphase: v1\ncustom: keep\n---\n",
+        )
+        .unwrap();
+        let read = || fs::read_to_string(vault.join("tasks/002-a.md")).unwrap();
+
+        // No flags -> the no-op guard errors.
+        let err = run_in(&vault, &["edit", "002"]).unwrap_err();
+        assert!(err.to_string().contains("nothing to change"));
+
+        // Set fields; --phase "" clears; --tag replaces; --due sets.
+        run_in(
+            &vault,
+            &[
+                "edit",
+                "002",
+                "--priority",
+                "high",
+                "--phase",
+                "",
+                "--due",
+                "2026-08-01",
+                "--tag",
+                "x",
+                "--tag",
+                "y",
+                "--depends-on",
+                "001",
+                "--owner",
+                "me",
+            ],
+        )
+        .unwrap();
+        let raw = read();
+        assert!(raw.contains("priority: high"));
+        assert!(!raw.contains("phase:"));
+        assert!(raw.contains("due: 2026-08-01"));
+        assert!(raw.contains("owner: me"));
+        assert!(raw.contains("custom: keep")); // unknown field preserved
+        assert!(raw.contains("dependencies:"));
+
+        // Clear due and owner with empty strings; machine formats render.
+        run_in(&vault, &["edit", "002", "--due", "", "--json"]).unwrap();
+        assert!(!read().contains("due:"));
+        run_in(&vault, &["edit", "002", "--owner", "", "--yaml"]).unwrap();
+        assert!(!read().contains("owner:"));
+
+        // A bad enum / bad due propagate as errors.
+        assert!(run_in(&vault, &["edit", "002", "--priority", "urgent"]).is_err());
+        assert!(run_in(&vault, &["edit", "002", "--due", "someday"]).is_err());
+    }
+
+    #[test]
+    fn run_create_with_due() {
+        let vault = tempdir();
+        run_in(&vault, &["create", "Scheduled", "--due", "2026-09-01"]).unwrap();
+        let raw = fs::read_to_string(vault.join("tasks/001-scheduled.md")).unwrap();
+        assert!(raw.contains("due: 2026-09-01"));
     }
 
     #[test]

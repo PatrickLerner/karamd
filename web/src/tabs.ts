@@ -4,7 +4,11 @@ import type { Config, Status, TaskSummary } from "./types";
 // merges the long-running background phase with this week's work (plus any
 // unphased open task, so nothing gets lost). The remaining phases each get a
 // tab, and every terminal task collects in "Done".
-const TODAY_PHASES = new Set(["ongoing", "now"]);
+// Ordered: within the Today tab these phases render in this sequence
+// (Ongoing/background before This week), regardless of the server config's
+// phase order or whether it lists them at all.
+export const TODAY_PHASE_ORDER = ["ongoing", "now"] as const;
+const TODAY_PHASES = new Set<string>(TODAY_PHASE_ORDER);
 export const TODAY_TAB = "__today__";
 export const DONE_TAB = "__done__";
 export const DEFAULT_TAB = TODAY_TAB;
