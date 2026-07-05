@@ -1,11 +1,12 @@
 ---
 id: "020"
 title: "Finalize Nix web-deps hash for packages.karamd-web"
-status: pending
+status: completed
 priority: low
 dependencies: ["009"]
 tags: ["work", "web", "nix"]
 created_at: 2026-07-02
+completed_at: 2026-07-05
 ---
 
 # Finalize Nix web-deps hash for packages.karamd-web

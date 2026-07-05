@@ -1,11 +1,12 @@
 ---
 id: "019"
 title: "Verify karamd web over Tailscale (remote access + tailscale serve TLS)"
-status: pending
+status: completed
 priority: low
 dependencies: ["009"]
 tags: ["work", "web", "ops"]
 created_at: 2026-07-02
+completed_at: 2026-07-05
 ---
 
 # Verify karamd web over Tailscale (remote access + tailscale serve TLS)

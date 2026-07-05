@@ -1,12 +1,13 @@
 ---
 title: "Embedded AI execution of tasks in the web UI"
 id: "010"
-status: in-progress
+status: completed
 priority: low
 type: feature
 tags: ["work", "web", "ai"]
 dependencies: ["009"]
 created_at: "2026-07-02"
+completed_at: 2026-07-05
 ---
 
 # Embedded AI execution of tasks in the web UI
