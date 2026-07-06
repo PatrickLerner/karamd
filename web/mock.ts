@@ -24,6 +24,9 @@ const config: Config = {
     { id: "polish", name: "Polish", description: null, due: null },
   ],
   workflow: "pr-review",
+  // Mirrors `web.today` in `.taskmd.yaml`: the phases the Today tab merges,
+  // in render order. Here MVP work lands in Today; Polish gets its own tab.
+  today: ["mvp"],
 };
 
 const tasks: TaskDetail[] = [

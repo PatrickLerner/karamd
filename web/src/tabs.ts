@@ -4,11 +4,12 @@ import type { Config, Status, TaskSummary } from "./types";
 // merges the long-running background phase with this week's work (plus any
 // unphased open task, so nothing gets lost). The remaining phases each get a
 // tab, and every terminal task collects in "Done".
-// Ordered: within the Today tab these phases render in this sequence
-// (Ongoing/background before This week), regardless of the server config's
-// phase order or whether it lists them at all.
-export const TODAY_PHASE_ORDER = ["ongoing", "now"] as const;
-const TODAY_PHASES = new Set<string>(TODAY_PHASE_ORDER);
+//
+// Which phases the Today tab merges, and their render order, is config-driven:
+// it comes from `config.today` (server-resolved from `web.today` in
+// `.taskmd.yaml`, defaulting to the value below). Renaming a phase id only
+// needs a config edit, never a code change.
+export const DEFAULT_TODAY_PHASES = ["ongoing", "now"];
 export const TODAY_TAB = "__today__";
 export const DONE_TAB = "__done__";
 export const DEFAULT_TAB = TODAY_TAB;
@@ -36,19 +37,23 @@ export function isTerminal(status: Status): boolean {
 }
 
 export function buildTabs(config: Config, _tasks: TaskSummary[]): Tab[] {
+  const today = new Set(config.today);
   const tabs: Tab[] = [{ key: TODAY_TAB, name: "Today" }];
   for (const p of config.phases) {
-    if (p.id === null || TODAY_PHASES.has(p.id)) continue;
+    if (p.id === null || today.has(p.id)) continue;
     tabs.push({ key: p.id, name: p.name });
   }
   tabs.push({ key: DONE_TAB, name: "Done" });
   return tabs;
 }
 
-export function taskInTab(t: TaskSummary, tabKey: string): boolean {
+export function taskInTab(
+  t: TaskSummary,
+  tabKey: string,
+  today: Set<string>,
+): boolean {
   if (tabKey === DONE_TAB) return isTerminal(t.status);
   if (isTerminal(t.status)) return false;
-  if (tabKey === TODAY_TAB)
-    return t.phase === null || TODAY_PHASES.has(t.phase);
+  if (tabKey === TODAY_TAB) return t.phase === null || today.has(t.phase);
   return t.phase === tabKey;
 }

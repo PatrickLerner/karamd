@@ -80,6 +80,29 @@ impl Phase {
     }
 }
 
+/// Web dashboard settings (`web:`). karamd-specific; taskmd ignores it. Keeps
+/// the web's "Today" grouping out of the shared `phases:` entries so a phase
+/// rename never silently breaks the tab.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct WebConfig {
+    /// Phase ids merged into the web "Today" tab, in render order. Absent →
+    /// [`DEFAULT_TODAY_PHASES`]; present (even empty) → used verbatim.
+    pub today: Option<Vec<String>>,
+}
+
+/// Fallback set (and order) for the web "Today" tab when `web.today` is unset.
+pub const DEFAULT_TODAY_PHASES: [&str; 2] = ["ongoing", "now"];
+
+impl WebConfig {
+    /// Phase ids the "Today" tab merges, resolving the default when unset.
+    pub fn today_phases(&self) -> Vec<String> {
+        self.today
+            .clone()
+            .unwrap_or_else(|| DEFAULT_TODAY_PHASES.iter().map(|s| s.to_string()).collect())
+    }
+}
+
 /// One entry of the `scopes:` map, backing task `touches` values.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Scope {
@@ -100,6 +123,8 @@ pub struct Config {
     pub id: IdConfig,
     pub workflow: Workflow,
     pub scopes: BTreeMap<String, Scope>,
+    /// Web dashboard settings (karamd-specific; ignored by taskmd).
+    pub web: WebConfig,
 }
 
 impl Default for Config {
@@ -110,6 +135,7 @@ impl Default for Config {
             id: IdConfig::default(),
             workflow: Workflow::default(),
             scopes: BTreeMap::new(),
+            web: WebConfig::default(),
         }
     }
 }
@@ -168,6 +194,9 @@ phases:
     description: "Core CLI features"
     due: 2026-04-01
   - name: "Web Dashboard"
+web:
+  today:
+    - core-cli
 scopes:
   cli/graph:
     description: "Graph rendering"
@@ -192,6 +221,7 @@ scopes:
         assert_eq!(c.phases[0].due.as_deref(), Some("2026-04-01"));
         // Phase without id falls back to name as its key.
         assert_eq!(c.phases[1].key(), "Web Dashboard");
+        assert_eq!(c.web.today_phases(), vec!["core-cli"]);
         assert_eq!(c.scopes.len(), 2);
         assert_eq!(
             c.scopes["cli/graph"].description.as_deref(),
@@ -272,6 +302,38 @@ scopes:
         assert_eq!(c.phase_index("Web Dashboard"), Some(1));
         assert_eq!(c.phase_index("nope"), None);
         assert_eq!(Config::default().phase_index("anything"), None);
+    }
+
+    #[test]
+    fn web_today_defaults_when_absent() {
+        // No `web:` section at all: the resolved Today set is the default.
+        let c = Config::default();
+        assert_eq!(c.web.today, None);
+        assert_eq!(c.web.today_phases(), vec!["ongoing", "now"]);
+        // A `web:` section without `today:` behaves the same.
+        let c: Config = serde_norway::from_str("web: {}\n").unwrap();
+        assert_eq!(c.web.today_phases(), vec!["ongoing", "now"]);
+    }
+
+    #[test]
+    fn web_today_parsed_in_order() {
+        let c: Config =
+            serde_norway::from_str("web:\n  today:\n    - now\n    - ongoing\n    - triage\n")
+                .unwrap();
+        assert_eq!(
+            c.web.today_phases(),
+            vec!["now", "ongoing", "triage"],
+            "order is preserved verbatim, not sorted"
+        );
+    }
+
+    #[test]
+    fn web_today_empty_list_is_respected() {
+        // An explicit empty list means "merge no named phases" (only unphased
+        // open tasks fall into Today) and must not fall back to the default.
+        let c: Config = serde_norway::from_str("web:\n  today: []\n").unwrap();
+        assert_eq!(c.web.today, Some(Vec::new()));
+        assert!(c.web.today_phases().is_empty());
     }
 
     #[test]

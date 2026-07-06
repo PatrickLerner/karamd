@@ -208,6 +208,24 @@ karamd web [--vault DIR] [--bind ADDR] [--web-dir DIR]
   bundle; it defaults to `dist`. The backend is async (axum on tokio) and
   WebSocket-capable.
 
+### Today tab grouping
+
+The dashboard's default **Today** tab merges several phases into one view (plus
+any unphased open task). Which phases, and their render order, is config-driven,
+not hardcoded, so renaming a phase id never silently breaks the grouping. Set it
+in a karamd-specific `web:` section of `.taskmd.yaml` (taskmd ignores the
+section):
+
+```yaml
+web:
+  today: [ongoing, now]   # phase ids merged into Today, in this order
+```
+
+Omit `web.today` and it defaults to `[ongoing, now]` (the previous behavior). An
+explicit empty list (`today: []`) merges no named phase, so only unphased open
+tasks fall into Today. Each remaining phase gets its own tab, and terminal tasks
+collect in **Done**.
+
 ### Run a task with an AI (embedded terminal)
 
 A task's detail page has a **Run with Claude** button. It opens an embedded

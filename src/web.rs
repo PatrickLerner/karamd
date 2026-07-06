@@ -179,6 +179,9 @@ struct PhaseOut {
 struct ConfigOut {
     phases: Vec<PhaseOut>,
     workflow: String,
+    /// Phase ids the web "Today" tab merges, in render order (config-driven,
+    /// with a default when `web.today` is unset).
+    today: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -362,7 +365,13 @@ async fn get_config(State(state): State<AppState>) -> std::result::Result<Respon
         crate::taskmd::Workflow::PrReview => "pr-review",
     }
     .to_string();
-    Ok(Json(ConfigOut { phases, workflow }).into_response())
+    let today = vault.config.web.today_phases();
+    Ok(Json(ConfigOut {
+        phases,
+        workflow,
+        today,
+    })
+    .into_response())
 }
 
 /// GET /api/next?limit=N — ranked recommendations (subset of the CLI shape).
@@ -796,7 +805,7 @@ mod tests {
         let root = tempdir();
         fs::write(
             root.join(".taskmd.yaml"),
-            "workflow: pr-review\nphases:\n  - id: v1\n    name: One\n  - name: Two\n",
+            "workflow: pr-review\nphases:\n  - id: v1\n    name: One\n  - name: Two\nweb:\n  today:\n    - v1\n",
         )
         .unwrap();
         let (status, body) = call(&root, get("/api/config")).await;
@@ -804,6 +813,9 @@ mod tests {
         assert_eq!(body["workflow"], "pr-review");
         assert_eq!(body["phases"][0]["id"], "v1");
         assert_eq!(body["phases"][1]["name"], "Two");
+        // Today grouping comes from `web.today`, verbatim.
+        assert_eq!(body["today"][0], "v1");
+        assert_eq!(body["today"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -813,6 +825,9 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["workflow"], "solo");
         assert!(body["phases"].as_array().unwrap().is_empty());
+        // No config: Today falls back to the built-in default.
+        assert_eq!(body["today"][0], "ongoing");
+        assert_eq!(body["today"][1], "now");
     }
 
     #[tokio::test]

@@ -4,6 +4,16 @@ All notable changes to karamd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-06
+
+### Added
+
+- Web "Today" tab grouping is config-driven. A new karamd-specific `web.today`
+  list in `.taskmd.yaml` declares which phase ids the Today tab merges and in
+  what order, so renaming a phase id no longer silently breaks the grouping.
+  Omitting it keeps the previous default (`[ongoing, now]`); an explicit empty
+  list merges only unphased open tasks. Served via `GET /api/config` (`today`).
+
 ## [0.3.0] - 2026-07-05
 
 ### Added

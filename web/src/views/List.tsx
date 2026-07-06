@@ -3,7 +3,7 @@ import { ErrorBanner } from "../components/Banner";
 import { PriorityChip, StatusChip } from "../components/Chip";
 import { stripWikiLinks } from "../markdown";
 import { taskHref } from "../router";
-import { DONE_TAB, TODAY_PHASE_ORDER, tabSlug, taskInTab } from "../tabs";
+import { DONE_TAB, tabSlug, taskInTab } from "../tabs";
 import type { InvalidTask, Phase, TaskSummary } from "../types";
 
 interface Group {
@@ -35,6 +35,7 @@ function TaskRow({ task, tab }: { task: TaskSummary; tab: string }) {
 export function List({
   tasks,
   phases,
+  today,
   invalid,
   rankById,
   activeTab,
@@ -45,6 +46,7 @@ export function List({
 }: {
   tasks: TaskSummary[] | null;
   phases: Phase[];
+  today: string[];
   invalid: InvalidTask[];
   rankById: Map<string, number>;
   activeTab: string | null;
@@ -58,7 +60,8 @@ export function List({
   const groups = useMemo<Group[] | null>(() => {
     if (tasks === null || activeTab === null) return null;
     const q = query.trim().toLowerCase();
-    const inTab = tasks.filter((t) => taskInTab(t, activeTab));
+    const todaySet = new Set(today);
+    const inTab = tasks.filter((t) => taskInTab(t, activeTab, todaySet));
     const filtered =
       q === ""
         ? inTab
@@ -94,12 +97,12 @@ export function List({
       byPhase.delete(p.id);
     }
     // Phases not present in the server config land here. Order them
-    // deterministically (the Today merge phases first, in their intended
+    // deterministically (the Today merge phases first, in their configured
     // sequence; then any other phase alphabetically; "No phase" last) so the
     // group order never depends on task/rank insertion order.
     const rank = (key: string | null): number => {
       if (key === null) return Number.MAX_SAFE_INTEGER;
-      const i = (TODAY_PHASE_ORDER as readonly string[]).indexOf(key);
+      const i = today.indexOf(key);
       return i === -1 ? 1_000_000 : i;
     };
     const leftover = [...byPhase.entries()].sort(
@@ -109,7 +112,7 @@ export function List({
       if (arr.length > 0) out.push({ name: key ?? "No phase", tasks: arr });
     }
     return out;
-  }, [tasks, phases, activeTab, query, rankById]);
+  }, [tasks, phases, today, activeTab, query, rankById]);
 
   const total = groups?.reduce((n, g) => n + g.tasks.length, 0) ?? 0;
   // Single-phase tabs don't need a headline echoing the tab name.

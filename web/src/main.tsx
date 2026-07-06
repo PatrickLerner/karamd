@@ -21,6 +21,7 @@ import {
 import {
   buildTabs,
   DEFAULT_TAB,
+  DEFAULT_TODAY_PHASES,
   tabFromSlug,
   tabSlug,
   taskInTab,
@@ -83,7 +84,11 @@ function App() {
     refetchInterval: 3000,
   });
 
-  const config: Config = configQ.data ?? { phases: [], workflow: "solo" };
+  const config: Config = configQ.data ?? {
+    phases: [],
+    workflow: "solo",
+    today: DEFAULT_TODAY_PHASES,
+  };
   const tasks: TaskSummary[] | null = tasksQ.data?.tasks ?? null;
   const invalid: InvalidTask[] = tasksQ.data?.invalid ?? [];
   const sessions: SessionInfo[] = sessionsQ.data ?? [];
@@ -98,6 +103,7 @@ function App() {
   }, [tasksQ.error]);
 
   const tabs = useMemo(() => buildTabs(config, tasks ?? []), [config, tasks]);
+  const todayPhases = useMemo(() => new Set(config.today), [config.today]);
 
   // The active tab comes from the URL. A bare `#/` (or an unknown tab) redirects
   // to the default view so the URL is always canonical and reload-safe.
@@ -114,9 +120,12 @@ function App() {
   const counts = useMemo(() => {
     const list = tasks ?? [];
     return new Map(
-      tabs.map((t) => [t.key, list.filter((x) => taskInTab(x, t.key)).length]),
+      tabs.map((t) => [
+        t.key,
+        list.filter((x) => taskInTab(x, t.key, todayPhases)).length,
+      ]),
     );
-  }, [tabs, tasks]);
+  }, [tabs, tasks, todayPhases]);
 
   const tabForLinks = activeTab ? tabSlug(activeTab) : DEFAULT_TAB;
   const tabName = tabs.find((t) => t.key === activeTab)?.name ?? "";
@@ -161,6 +170,7 @@ function App() {
             <List
               tasks={tasks}
               phases={config.phases}
+              today={config.today}
               invalid={invalid}
               rankById={rankById}
               activeTab={activeTab}

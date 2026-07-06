@@ -76,6 +76,10 @@ export interface Phase {
 export interface Config {
   phases: Phase[];
   workflow: Workflow;
+  // Phase ids the "Today" tab merges, in render order. Server-resolved: it
+  // always carries a value (the server applies the default when config omits
+  // `web.today`), so the client never hardcodes the grouping.
+  today: string[];
 }
 
 export interface NextItem {

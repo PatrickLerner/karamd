@@ -46,7 +46,9 @@ Split into a library crate (all logic, unit-testable) plus a thin binary:
   - `config.rs` — full `.taskmd.yaml`: `dir`, `phases`, `id` strategy
     (sequential/prefixed/random/ulid; prefixed emits `dr001`, **no separator** —
     verified against taskmd 0.2.5, the spec doc's `dr-001` is wrong), `workflow`
-    (solo/pr-review), `scopes`.
+    (solo/pr-review), `scopes`, and a karamd-specific `web:` section
+    (`web.today` = phase ids the web Today tab merges, in order; taskmd ignores
+    it; default `["ongoing", "now"]`).
   - `model.rs` — `Task` backed by its complete frontmatter as an ordered YAML
     mapping, so unknown fields round-trip untouched. Spec enums (`completed`,
     not `done`; hyphenated `in-progress`/`in-review`). Auto set/clear of
