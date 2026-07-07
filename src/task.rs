@@ -227,6 +227,7 @@ mod tests {
             lead_days: None,
             day_of_month: None,
             day_of_week: None,
+            week: None,
             phase: Some("next".into()),
             priority: Some("high".into()),
             tags: vec!["personal".into(), "work".into()],

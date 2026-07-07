@@ -9,15 +9,17 @@ general taskmd tool: task verbs, query, ranked next, validate, web UI
   existing task files, creates a new task only when a rule is due. Must be
   **idempotent** — re-running on the same day never duplicates. Dedup marker:
   `recurring: <key>` frontmatter on generated tasks.
-- Four triggers: `after_completion` (N days after the last one was completed),
+- Five triggers: `after_completion` (N days after the last one was completed),
   `calendar` (lead_days before a fixed annual date, once per year), `monthly`
   (lead_days before a fixed day of the month, once per month; marker
-  `key:YYYY-MM`; day 29-31 clamps to the month's last day; lead_days 0-27), and
+  `key:YYYY-MM`; day 29-31 clamps to the month's last day; lead_days 0-27),
   `weekly` (a fixed `day_of_week` `mon`..`sun`, once per ISO week; marker
   `key:YYYY-Www`; due on or after that weekday within the week so a late run
   catches up, a missed week is not backfilled, and an open task for the key
-  blocks a second). The code reads task *state* each run, never blindly emits on
-  a schedule.
+  blocks a second), and `nth_weekday` (the `week`-th `1`..`4`/`last` `day_of_week`
+  of the month, once per month; marker `key:YYYY-MM`; on-or-after within the
+  month, open-task guard, like weekly but month-scoped). The code reads task
+  *state* each run, never blindly emits on a schedule.
 - **Design shift (settled in #008):** the *generator* still only adds files and
   reads completion state, but karamd as a whole is now a first-class taskmd
   writer via the `src/taskmd/` library layer (verbs, web UI edits). Completions

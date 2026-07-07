@@ -125,6 +125,49 @@ pub fn weekly_due(today: NaiveDate, target: Weekday) -> Option<String> {
     }
 }
 
+/// Which occurrence of a weekday within a month a `nth_weekday` rule targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeekOrdinal {
+    /// The Nth matching weekday (1-4; higher is rejected by validation because a
+    /// 5th does not exist in every month).
+    Nth(u32),
+    /// The final matching weekday of the month (4th or 5th, whichever is last).
+    Last,
+}
+
+/// The concrete date of the `ord`-th `weekday` in (`year`, `month`). Nth(1-4)
+/// and Last always exist in every month, so this is total (no `Option`).
+pub fn nth_weekday_occurrence(
+    year: i32,
+    month: u32,
+    weekday: Weekday,
+    ord: WeekOrdinal,
+) -> NaiveDate {
+    let first = NaiveDate::from_ymd_opt(year, month, 1).expect("first of month is valid");
+    // Days from the 1st to the first matching weekday (0-6).
+    let offset = (7 + weekday.num_days_from_monday() as i64
+        - first.weekday().num_days_from_monday() as i64)
+        % 7;
+    let first_day = 1 + offset as u32; // day-of-month of the first match (1-7)
+    let day = match ord {
+        WeekOrdinal::Nth(n) => first_day + 7 * (n - 1),
+        WeekOrdinal::Last => {
+            let steps = (last_day_of_month(year, month) - first_day) / 7;
+            first_day + 7 * steps
+        }
+    };
+    NaiveDate::from_ymd_opt(year, month, day).expect("nth/last weekday is within the month")
+}
+
+/// nth_weekday: once per month, on or after the `ord`-th `weekday`. Returns this
+/// month's `YYYY-MM` discriminator when today is on or after that date (so a
+/// late run catches up), else `None`. Like `weekly`, a fully missed month is not
+/// backfilled: the discriminator is always the current month.
+pub fn nth_weekday_due(today: NaiveDate, weekday: Weekday, ord: WeekOrdinal) -> Option<String> {
+    let occ = nth_weekday_occurrence(today.year(), today.month(), weekday, ord);
+    (today >= occ).then(|| format!("{:04}-{:02}", today.year(), today.month()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +425,71 @@ mod tests {
         assert_eq!(
             weekly_due(d(2027, 1, 1), Weekday::Fri),
             Some("2026-W53".to_string())
+        );
+    }
+
+    #[test]
+    fn nth_weekday_occurrence_first_and_fourth() {
+        assert_eq!(
+            nth_weekday_occurrence(2026, 7, Weekday::Mon, WeekOrdinal::Nth(1)),
+            d(2026, 7, 6)
+        );
+        assert_eq!(
+            nth_weekday_occurrence(2026, 7, Weekday::Mon, WeekOrdinal::Nth(4)),
+            d(2026, 7, 27)
+        );
+    }
+
+    #[test]
+    fn nth_weekday_occurrence_last_is_fifth_or_fourth() {
+        // July 2026 has five Fridays; last is the 5th.
+        assert_eq!(
+            nth_weekday_occurrence(2026, 7, Weekday::Fri, WeekOrdinal::Last),
+            d(2026, 7, 31)
+        );
+        // February 2026 has four Wednesdays; last is the 4th.
+        assert_eq!(
+            nth_weekday_occurrence(2026, 2, Weekday::Wed, WeekOrdinal::Last),
+            d(2026, 2, 25)
+        );
+        // Last Saturday of August 2026.
+        assert_eq!(
+            nth_weekday_occurrence(2026, 8, Weekday::Sat, WeekOrdinal::Last),
+            d(2026, 8, 29)
+        );
+    }
+
+    #[test]
+    fn nth_weekday_before_occurrence_not_due() {
+        // First Monday is Jul 6; the 5th is before it.
+        assert_eq!(
+            nth_weekday_due(d(2026, 7, 5), Weekday::Mon, WeekOrdinal::Nth(1)),
+            None
+        );
+    }
+
+    #[test]
+    fn nth_weekday_on_and_after_occurrence_due_same_month() {
+        assert_eq!(
+            nth_weekday_due(d(2026, 7, 6), Weekday::Mon, WeekOrdinal::Nth(1)),
+            Some("2026-07".to_string())
+        );
+        // Catch-up later in the month keeps the same discriminator.
+        assert_eq!(
+            nth_weekday_due(d(2026, 7, 20), Weekday::Mon, WeekOrdinal::Nth(1)),
+            Some("2026-07".to_string())
+        );
+    }
+
+    #[test]
+    fn nth_weekday_last_friday_due() {
+        assert_eq!(
+            nth_weekday_due(d(2026, 7, 30), Weekday::Fri, WeekOrdinal::Last),
+            None
+        );
+        assert_eq!(
+            nth_weekday_due(d(2026, 7, 31), Weekday::Fri, WeekOrdinal::Last),
+            Some("2026-07".to_string())
         );
     }
 }

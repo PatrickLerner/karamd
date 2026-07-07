@@ -1,12 +1,13 @@
 ---
 id: '033'
 title: 'nth_weekday trigger: Nth weekday of the month (e.g. first Monday, last Friday)'
-status: pending
+status: completed
 created_at: 2026-07-07
 priority: medium
 type: feature
 tags:
 - generator
+completed_at: 2026-07-07
 ---
 
 ## Objective

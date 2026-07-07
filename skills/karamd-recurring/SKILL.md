@@ -1,6 +1,6 @@
 ---
 name: karamd-recurring
-description: The karamd recurring-rules config format (`.taskmd.recurring.yaml`): rule fields, the four triggers (after_completion, calendar, monthly, weekly), optional body, and the dedup markers karamd stamps on generated tasks. Use when authoring or editing a `.taskmd.recurring.yaml` file, or explaining how karamd decides a recurring task is due.
+description: The karamd recurring-rules config format (`.taskmd.recurring.yaml`): rule fields, the five triggers (after_completion, calendar, monthly, weekly, nth_weekday), optional body, and the dedup markers karamd stamps on generated tasks. Use when authoring or editing a `.taskmd.recurring.yaml` file, or explaining how karamd decides a recurring task is due.
 ---
 
 # karamd recurring rules (`.taskmd.recurring.yaml`)
@@ -22,7 +22,7 @@ Every rule requires:
 |-------|---------|
 | `key` | Dedup marker, unique across the whole file. Groups a rule's tasks. |
 | `title` | Task title (becomes the `# <title>` heading). |
-| `trigger` | One of `after_completion`, `calendar`, `monthly`, `weekly`. |
+| `trigger` | One of `after_completion`, `calendar`, `monthly`, `weekly`, `nth_weekday`. |
 
 Trigger-specific fields:
 
@@ -43,6 +43,10 @@ Trigger-specific fields:
   backfilled. Like `after_completion`, an open task for the key blocks a second,
   so there is never more than one at a time. No `lead_days`: weekly is strictly
   on-or-after the day.
+- **`nth_weekday`**: `day_of_week` (same form as weekly) + `week` (`1`-`4` or
+  `last`). Due on the Nth (or last) matching weekday of the month, once per
+  month, e.g. "first Monday", "last Friday". On-or-after that date so a late run
+  catches up within the month; an open task for the key blocks a second.
 
 Optional on any rule:
 
@@ -73,6 +77,8 @@ how it avoids duplicates. The exact form encodes the period:
 - `monthly` → `recurring: "<key>:YYYY-MM"`
 - `weekly` → `recurring: "<key>:YYYY-Www"` (ISO week, e.g. `linkedin:2026-W28`;
   the ISO year can differ from the calendar year near Jan 1)
+- `nth_weekday` → `recurring: "<key>:YYYY-MM"` (same month discriminator as
+  `monthly`)
 
 The period suffix is what makes "once per period" hold even if the task is
 completed early inside its lead window. This is an unknown field to taskmd, so
@@ -133,6 +139,15 @@ fully skipped week is never backfilled.
   day_of_week: fri
   priority: medium
   tags: [marketing]
+
+# Nth (or last) weekday of the month, once per month (marker key:YYYY-MM).
+- key: ops-review
+  title: "Monthly ops review"
+  trigger: nth_weekday
+  day_of_week: mon
+  week: 1            # first Monday; `last` for the last such weekday
+  priority: medium
+  tags: [ops]
 
 # Optional body replacing the TODO stub.
 - key: quarterly-backup

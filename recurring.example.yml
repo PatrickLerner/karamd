@@ -45,6 +45,17 @@
   priority: medium
   tags: [marketing]
 
+# Nth (or last) weekday of the month, once per month (dedup marker key:YYYY-MM).
+# `week` is 1-4 or `last`. Due on or after that date; a later run in the month
+# catches up. Like weekly, an open task for the key blocks a second.
+- key: ops-review
+  title: "Monthly ops review"
+  trigger: nth_weekday
+  day_of_week: mon
+  week: 1            # first Monday; use `last` for e.g. the last Friday
+  priority: medium
+  tags: [ops]
+
 # Optional `body`: markdown for the generated task, replacing the default
 # `## Objective / ## Tasks / ## Acceptance Criteria` TODO stub. Omit it to keep
 # the stub. karamd still writes the frontmatter, the `# <title>` heading, and a

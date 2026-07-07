@@ -12,6 +12,8 @@
 //!   - `monthly`: due `lead_days` before a fixed day of the month, once per month.
 //!   - `weekly`: due on a fixed weekday, once per ISO week (catches up later in
 //!     the week if a run is missed).
+//!   - `nth_weekday`: due on the Nth (or last) weekday of the month, once per
+//!     month (e.g. first Monday, last Friday).
 
 use std::ffi::OsString;
 use std::fs;
@@ -367,6 +369,7 @@ fn marker_belongs(marker: &str, rule: &Rule) -> bool {
             .is_some_and(|year| year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit())),
         Trigger::Monthly => discriminator.is_some_and(is_year_month),
         Trigger::Weekly => discriminator.is_some_and(is_iso_week),
+        Trigger::NthWeekday => discriminator.is_some_and(is_year_month),
     }
 }
 
@@ -402,6 +405,9 @@ fn is_iso_week(s: &str) -> bool {
 ///   - weekly: an open task blocks (never two at once); otherwise due once per
 ///     ISO week when today is on or after the pinned weekday, keyed by a
 ///     `YYYY-Www` discriminator so early completion can't re-trigger the week.
+///   - nth_weekday: like weekly but scoped to the month — an open task blocks;
+///     otherwise due once per month when today is on or after the Nth/last
+///     weekday, keyed by a `YYYY-MM` discriminator.
 fn decide(rule: &Rule, existing: &[ExistingTask], today: NaiveDate) -> Result<Option<String>> {
     let mine: Vec<&ExistingTask> = existing
         .iter()
@@ -465,6 +471,32 @@ fn decide(rule: &Rule, existing: &[ExistingTask], today: NaiveDate) -> Result<Op
             match due::weekly_due(today, target) {
                 Some(week) => {
                     let marker = format!("{}:{week}", rule.key);
+                    let exists = mine.iter().any(|t| t.recurring.as_deref() == Some(&marker));
+                    Ok((!exists).then_some(marker))
+                }
+                None => Ok(None),
+            }
+        }
+        Trigger::NthWeekday => {
+            let dow = rule
+                .day_of_week
+                .as_deref()
+                .context("nth_weekday needs day_of_week")?;
+            let target =
+                due::parse_weekday(dow).context("nth_weekday needs a valid day_of_week")?;
+            let ord = rule
+                .week
+                .as_ref()
+                .context("nth_weekday needs week")?
+                .ordinal()
+                .context("nth_weekday needs a valid week")?;
+            // Same one-at-a-time guard as weekly.
+            if mine.iter().any(|t| t.is_open()) {
+                return Ok(None);
+            }
+            match due::nth_weekday_due(today, target, ord) {
+                Some(ym) => {
+                    let marker = format!("{}:{ym}", rule.key);
                     let exists = mine.iter().any(|t| t.recurring.as_deref() == Some(&marker));
                     Ok((!exists).then_some(marker))
                 }
@@ -842,6 +874,7 @@ mod tests {
         "- key: topup\n  title: Top up\n  trigger: monthly\n  day_of_month: 12\n  lead_days: 7\n";
     const WEEKLY: &str =
         "- key: linkedin\n  title: LinkedIn\n  trigger: weekly\n  day_of_week: fri\n";
+    const NTH: &str = "- key: ops-review\n  title: Ops review\n  trigger: nth_weekday\n  day_of_week: mon\n  week: 1\n";
 
     #[test]
     fn marker_belongs_matches_correctly() {
@@ -870,6 +903,11 @@ mod tests {
         assert!(!marker_belongs("linkedin:2026-Wxx", weekly));
         assert!(!marker_belongs("linkedin:2026_W28", weekly));
         assert!(!marker_belongs("other:2026-W28", weekly));
+        let nth = &rule::load_rules(NTH).unwrap()[0];
+        assert!(marker_belongs("ops-review:2026-07", nth));
+        assert!(!marker_belongs("ops-review", nth));
+        assert!(!marker_belongs("ops-review:2026-W28", nth)); // week, not month
+        assert!(!marker_belongs("other:2026-07", nth));
     }
 
     #[test]
@@ -1146,6 +1184,90 @@ mod tests {
     }
 
     #[test]
+    fn nth_weekday_creates_once_per_month_on_or_after_the_day() {
+        let (vault, config) = vault_with_rules(NTH);
+        // First Monday of July 2026 is the 6th; before it, nothing.
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 5), false).unwrap(),
+            Report::default()
+        );
+        let r = generate(&vault, &config, day(2026, 7, 6), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        assert_eq!(r.created[0].marker, "ops-review:2026-07");
+    }
+
+    #[test]
+    fn nth_weekday_open_task_blocks_and_survives_early_completion() {
+        let (vault, config) = vault_with_rules(NTH);
+        let r = generate(&vault, &config, day(2026, 7, 6), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        // Open task blocks a second later in the month.
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 20), false).unwrap(),
+            Report::default()
+        );
+        // Complete it early; the month marker still blocks re-creation.
+        let path = vault.join("tasks").join(&r.created[0].filename);
+        let content = fs::read_to_string(&path)
+            .unwrap()
+            .replace("status: pending", "status: completed");
+        fs::write(&path, content).unwrap();
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 25), false).unwrap(),
+            Report::default()
+        );
+        // Next month opens a fresh occurrence (first Monday of Aug is the 3rd).
+        let next = generate(&vault, &config, day(2026, 8, 3), false).unwrap();
+        assert_eq!(next.created.len(), 1);
+        assert_eq!(next.created[0].marker, "ops-review:2026-08");
+    }
+
+    #[test]
+    fn nth_weekday_last_friday_fires() {
+        let (vault, config) = vault_with_rules(
+            "- key: retro\n  title: Retro\n  trigger: nth_weekday\n  day_of_week: fri\n  week: last\n",
+        );
+        // Last Friday of July 2026 is the 31st.
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 30), false).unwrap(),
+            Report::default()
+        );
+        let r = generate(&vault, &config, day(2026, 7, 31), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        assert_eq!(r.created[0].marker, "retro:2026-07");
+    }
+
+    #[test]
+    fn decide_nth_weekday_missing_day_of_week_errors() {
+        let mut r = bare_rule(Trigger::NthWeekday);
+        r.week = Some(rule::Week::Nth(1));
+        assert!(decide(&r, &[], day(2026, 7, 6)).is_err());
+    }
+
+    #[test]
+    fn decide_nth_weekday_invalid_day_of_week_errors() {
+        let mut r = bare_rule(Trigger::NthWeekday);
+        r.day_of_week = Some("friday".into());
+        r.week = Some(rule::Week::Nth(1));
+        assert!(decide(&r, &[], day(2026, 7, 6)).is_err());
+    }
+
+    #[test]
+    fn decide_nth_weekday_missing_week_errors() {
+        let mut r = bare_rule(Trigger::NthWeekday);
+        r.day_of_week = Some("mon".into());
+        assert!(decide(&r, &[], day(2026, 7, 6)).is_err());
+    }
+
+    #[test]
+    fn decide_nth_weekday_invalid_week_errors() {
+        let mut r = bare_rule(Trigger::NthWeekday);
+        r.day_of_week = Some("mon".into());
+        r.week = Some(rule::Week::Nth(9));
+        assert!(decide(&r, &[], day(2026, 7, 6)).is_err());
+    }
+
+    #[test]
     fn dry_run_writes_nothing_but_reports() {
         let (vault, config) = vault_with_rules(AFTER);
         let r = generate(&vault, &config, day(2026, 7, 1), true).unwrap();
@@ -1277,6 +1399,7 @@ mod tests {
             lead_days: None,
             day_of_month: None,
             day_of_week: None,
+            week: None,
             phase: None,
             priority: None,
             tags: vec![],

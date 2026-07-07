@@ -21,6 +21,30 @@ pub enum Trigger {
     Monthly,
     /// Due on a fixed weekday, once per ISO week (catches up later in the week).
     Weekly,
+    /// Due on the Nth (or last) weekday of the month, once per month.
+    NthWeekday,
+}
+
+/// The `week` field of an `nth_weekday` rule: either a number (`1`-`4`) or the
+/// keyword `last`. Untagged so YAML `week: 1` and `week: last` both parse and
+/// round-trip to the same shape.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Week {
+    Nth(u32),
+    Keyword(String),
+}
+
+impl Week {
+    /// Resolve to a validated [`crate::due::WeekOrdinal`], or `None` if the value
+    /// is out of range (`0`, `>4`) or an unknown keyword.
+    pub fn ordinal(&self) -> Option<crate::due::WeekOrdinal> {
+        match self {
+            Week::Nth(n) if (1..=4).contains(n) => Some(crate::due::WeekOrdinal::Nth(*n)),
+            Week::Keyword(s) if s == "last" => Some(crate::due::WeekOrdinal::Last),
+            _ => None,
+        }
+    }
 }
 
 impl Trigger {
@@ -32,6 +56,7 @@ impl Trigger {
             Trigger::Calendar => "calendar",
             Trigger::Monthly => "monthly",
             Trigger::Weekly => "weekly",
+            Trigger::NthWeekday => "nth_weekday",
         }
     }
 
@@ -44,6 +69,7 @@ impl Trigger {
             Trigger::Calendar => &["annual", "lead_days"],
             Trigger::Monthly => &["day_of_month", "lead_days"],
             Trigger::Weekly => &["day_of_week"],
+            Trigger::NthWeekday => &["day_of_week", "week"],
         }
     }
 }
@@ -69,10 +95,15 @@ pub struct Rule {
     /// month's last day, so `31` still fires in 30-day months and February).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_of_month: Option<u32>,
-    /// weekly: the weekday the task recurs on, one of `mon`,`tue`,`wed`,`thu`,
-    /// `fri`,`sat`,`sun`. Any other value is rejected by [`Rule::validate`].
+    /// weekly / nth_weekday: the weekday the task recurs on, one of `mon`,`tue`,
+    /// `wed`,`thu`,`fri`,`sat`,`sun`. Any other value is rejected by
+    /// [`Rule::validate`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_of_week: Option<String>,
+    /// nth_weekday: which occurrence of `day_of_week` in the month (`1`-`4` or
+    /// `last`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub week: Option<Week>,
     /// calendar/monthly: how many days before the occurrence the task should
     /// appear.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,6 +186,24 @@ impl Rule {
                     );
                 }
             }
+            Trigger::NthWeekday => {
+                let dow = self.day_of_week.as_deref().with_context(|| {
+                    format!("rule `{}`: nth_weekday requires `day_of_week`", self.key)
+                })?;
+                if crate::due::parse_weekday(dow).is_none() {
+                    bail!(
+                        "rule `{}`: `day_of_week` must be one of mon,tue,wed,thu,fri,sat,sun",
+                        self.key
+                    );
+                }
+                let week = self
+                    .week
+                    .as_ref()
+                    .with_context(|| format!("rule `{}`: nth_weekday requires `week`", self.key))?;
+                if week.ordinal().is_none() {
+                    bail!("rule `{}`: `week` must be 1-4 or `last`", self.key);
+                }
+            }
         }
         Ok(())
     }
@@ -165,12 +214,13 @@ impl Rule {
     /// owned by exactly one or two triggers (see [`Trigger::owned_fields`]).
     fn reject_foreign_fields(&self) -> Result<()> {
         let owned = self.trigger.owned_fields();
-        let present: [(&str, bool); 5] = [
+        let present: [(&str, bool); 6] = [
             ("every_days", self.every_days.is_some()),
             ("annual", self.annual.is_some()),
             ("day_of_month", self.day_of_month.is_some()),
             ("day_of_week", self.day_of_week.is_some()),
             ("lead_days", self.lead_days.is_some()),
+            ("week", self.week.is_some()),
         ];
         for (name, is_set) in present {
             if is_set && !owned.contains(&name) {
@@ -419,6 +469,15 @@ mod tests {
             ),
             ("weekly\n  day_of_week: fri\n  lead_days: 2", "lead_days"),
             ("weekly\n  day_of_week: fri\n  every_days: 3", "every_days"),
+            ("weekly\n  day_of_week: fri\n  week: 1", "week"),
+            (
+                "nth_weekday\n  day_of_week: mon\n  week: 1\n  day_of_month: 5",
+                "day_of_month",
+            ),
+            (
+                "monthly\n  day_of_month: 5\n  lead_days: 2\n  week: last",
+                "week",
+            ),
         ];
         for (spec, field) in cases {
             let raw = format!("- key: k\n  title: t\n  trigger: {spec}\n");
@@ -434,6 +493,67 @@ mod tests {
         // The sample uses only each trigger's own fields, so the foreign-field
         // check must not reject any of them.
         validate_all(&load_rules(SAMPLE).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn parses_nth_weekday_numeric_and_last() {
+        let raw = "- key: a\n  title: t\n  trigger: nth_weekday\n  day_of_week: mon\n  week: 1\n- key: b\n  title: t\n  trigger: nth_weekday\n  day_of_week: fri\n  week: last\n";
+        let rules = load_rules(raw).unwrap();
+        assert_eq!(rules[0].trigger, Trigger::NthWeekday);
+        assert_eq!(rules[0].week, Some(Week::Nth(1)));
+        assert_eq!(rules[1].week, Some(Week::Keyword("last".into())));
+    }
+
+    #[test]
+    fn nth_weekday_round_trips() {
+        let raw = "- key: a\n  title: t\n  trigger: nth_weekday\n  day_of_week: mon\n  week: 3\n- key: b\n  title: t\n  trigger: nth_weekday\n  day_of_week: fri\n  week: last\n";
+        let rules = load_rules(raw).unwrap();
+        let reparsed = load_rules(&dump_rules(&rules).unwrap()).unwrap();
+        assert_eq!(reparsed[0].week, Some(Week::Nth(3)));
+        assert_eq!(reparsed[1].week, Some(Week::Keyword("last".into())));
+    }
+
+    #[test]
+    fn validate_rejects_nth_weekday_without_day_of_week() {
+        let raw = "- key: k\n  title: t\n  trigger: nth_weekday\n  week: 1\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("day_of_week"));
+    }
+
+    #[test]
+    fn validate_rejects_nth_weekday_invalid_day_of_week() {
+        let raw =
+            "- key: k\n  title: t\n  trigger: nth_weekday\n  day_of_week: friday\n  week: 1\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("day_of_week"));
+    }
+
+    #[test]
+    fn validate_rejects_nth_weekday_without_week() {
+        let raw = "- key: k\n  title: t\n  trigger: nth_weekday\n  day_of_week: mon\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("week"));
+    }
+
+    #[test]
+    fn validate_rejects_nth_weekday_out_of_range_week() {
+        for w in ["0", "5", "first"] {
+            let raw = format!(
+                "- key: k\n  title: t\n  trigger: nth_weekday\n  day_of_week: mon\n  week: {w}\n"
+            );
+            let err = load_rules(&raw).unwrap()[0].validate().unwrap_err();
+            assert!(err.to_string().contains("week"), "for week={w}");
+        }
+    }
+
+    #[test]
+    fn validate_accepts_nth_weekday_bounds() {
+        for w in ["1", "4", "last"] {
+            let raw = format!(
+                "- key: k\n  title: t\n  trigger: nth_weekday\n  day_of_week: mon\n  week: {w}\n"
+            );
+            load_rules(&raw).unwrap()[0].validate().unwrap();
+        }
     }
 
     #[test]
