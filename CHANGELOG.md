@@ -4,6 +4,33 @@ All notable changes to karamd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-07
+
+### Added
+
+- New `nth_weekday` trigger: recur on the Nth (`week: 1`-`4`) or `last` weekday
+  of the month, once per month (dedup marker `key:YYYY-MM`), e.g. "first Monday",
+  "last Friday". Due on or after that date so a late run catches up within the
+  month; an open task for the key blocks a second.
+- `weekly`, `monthly`, and `nth_weekday` accept an optional `interval` (every Nth
+  period, default 1) plus an optional `anchor` (`YYYY-MM-DD` on the cadence) for
+  biweekly / every-other-month / quarterly schedules. `interval: 1` (or omitted)
+  is a no-op, so existing rules are unchanged; omitting `anchor` aligns the
+  cadence to a fixed epoch.
+- The web Rules editor now supports every trigger and field: `day_of_week`
+  (weekly, nth_weekday), `week` (nth_weekday), and `interval`/`anchor`.
+
+### Changed
+
+- Rule validation now rejects a trigger-specific field set on a rule whose
+  trigger does not own it (e.g. `day_of_month` on a `weekly` rule), instead of
+  silently ignoring it.
+
+### Fixed
+
+- The version in the web header is aligned as a baseline lockup next to the
+  wordmark instead of floating at the bottom of the header bar.
+
 ## [0.5.0] - 2026-07-07
 
 ### Added
