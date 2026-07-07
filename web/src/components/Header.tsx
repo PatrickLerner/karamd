@@ -21,9 +21,9 @@ export function Header({
           ☰
         </button>
         <a href="#/" className="brand">
-          karamd
+          <span className="brand-name">karamd</span>
+          {version && <span className="brand-version">v{version}</span>}
         </a>
-        {version && <span className="brand-version">v{version}</span>}
       </div>
       <span className="header-date">{date}</span>
     </header>
