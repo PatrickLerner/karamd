@@ -23,6 +23,31 @@ pub enum Trigger {
     Weekly,
 }
 
+impl Trigger {
+    /// The rules-file spelling of this trigger (matches the `snake_case`
+    /// serde form), for error messages.
+    fn label(self) -> &'static str {
+        match self {
+            Trigger::AfterCompletion => "after_completion",
+            Trigger::Calendar => "calendar",
+            Trigger::Monthly => "monthly",
+            Trigger::Weekly => "weekly",
+        }
+    }
+
+    /// The trigger-specific fields this trigger legitimately uses. Any *other*
+    /// trigger-specific field being set is a rules-file typo (see
+    /// [`Rule::reject_foreign_fields`]).
+    fn owned_fields(self) -> &'static [&'static str] {
+        match self {
+            Trigger::AfterCompletion => &["every_days"],
+            Trigger::Calendar => &["annual", "lead_days"],
+            Trigger::Monthly => &["day_of_month", "lead_days"],
+            Trigger::Weekly => &["day_of_week"],
+        }
+    }
+}
+
 /// One recurring-task definition from the rules file. Serializes back to the
 /// same YAML shape (absent optionals and empty tags omitted) so the web UI can
 /// round-trip the rules file without churning it.
@@ -76,6 +101,10 @@ impl Rule {
         {
             bail!("rule `{}`: `body` must not be empty", self.key);
         }
+        // A field belonging to a different trigger is almost always a typo; the
+        // trigger would silently ignore it. Reject it before the per-trigger
+        // required-field checks so such mistakes fail loudly.
+        self.reject_foreign_fields()?;
         match self.trigger {
             Trigger::AfterCompletion => {
                 if self.every_days.is_none() {
@@ -125,6 +154,31 @@ impl Rule {
                         self.key
                     );
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reject any trigger-specific field that does not belong to this rule's
+    /// trigger. `key`/`title`/`trigger` and the shared cosmetic fields
+    /// (`phase`, `priority`, `tags`, `body`) are always allowed; the rest are
+    /// owned by exactly one or two triggers (see [`Trigger::owned_fields`]).
+    fn reject_foreign_fields(&self) -> Result<()> {
+        let owned = self.trigger.owned_fields();
+        let present: [(&str, bool); 5] = [
+            ("every_days", self.every_days.is_some()),
+            ("annual", self.annual.is_some()),
+            ("day_of_month", self.day_of_month.is_some()),
+            ("day_of_week", self.day_of_week.is_some()),
+            ("lead_days", self.lead_days.is_some()),
+        ];
+        for (name, is_set) in present {
+            if is_set && !owned.contains(&name) {
+                bail!(
+                    "rule `{}`: `{name}` is not valid for a {} trigger",
+                    self.key,
+                    self.trigger.label()
+                );
             }
         }
         Ok(())
@@ -324,6 +378,62 @@ mod tests {
             let raw = format!("- key: k\n  title: t\n  trigger: weekly\n  day_of_week: {dow}\n");
             load_rules(&raw).unwrap()[0].validate().unwrap();
         }
+    }
+
+    #[test]
+    fn validate_rejects_foreign_trigger_fields() {
+        // Each pairing sets a field owned by a different trigger; validate must
+        // reject it, naming the offending field.
+        let cases = [
+            (
+                "after_completion\n  every_days: 3\n  annual: \"01-01\"",
+                "annual",
+            ),
+            (
+                "after_completion\n  every_days: 3\n  day_of_month: 5",
+                "day_of_month",
+            ),
+            (
+                "after_completion\n  every_days: 3\n  day_of_week: fri",
+                "day_of_week",
+            ),
+            (
+                "after_completion\n  every_days: 3\n  lead_days: 2",
+                "lead_days",
+            ),
+            (
+                "calendar\n  annual: \"01-01\"\n  lead_days: 2\n  every_days: 3",
+                "every_days",
+            ),
+            (
+                "calendar\n  annual: \"01-01\"\n  lead_days: 2\n  day_of_week: fri",
+                "day_of_week",
+            ),
+            (
+                "monthly\n  day_of_month: 5\n  lead_days: 2\n  annual: \"01-01\"",
+                "annual",
+            ),
+            (
+                "weekly\n  day_of_week: fri\n  day_of_month: 5",
+                "day_of_month",
+            ),
+            ("weekly\n  day_of_week: fri\n  lead_days: 2", "lead_days"),
+            ("weekly\n  day_of_week: fri\n  every_days: 3", "every_days"),
+        ];
+        for (spec, field) in cases {
+            let raw = format!("- key: k\n  title: t\n  trigger: {spec}\n");
+            let err = load_rules(&raw).unwrap()[0].validate().unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains(field), "expected `{field}` in: {msg}");
+            assert!(msg.contains("is not valid for"), "wrong message: {msg}");
+        }
+    }
+
+    #[test]
+    fn validate_still_accepts_rules_with_only_owned_fields() {
+        // The sample uses only each trigger's own fields, so the foreign-field
+        // check must not reject any of them.
+        validate_all(&load_rules(SAMPLE).unwrap()).unwrap();
     }
 
     #[test]

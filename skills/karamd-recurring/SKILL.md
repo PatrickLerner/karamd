@@ -163,5 +163,8 @@ fully skipped week is never backfilled.
 - Using `done`/`in_progress` anywhere: statuses are `completed`, `in-progress`,
   `in-review` (see `taskmd-format`).
 - `lead_days` above 27 on `monthly`: rejected.
+- A field owned by another trigger (e.g. `day_of_month` on a `weekly` rule, or
+  `day_of_week` on `monthly`): rejected. Each trigger accepts only its own
+  fields, so a misplaced field fails loudly instead of being ignored.
 - Assuming karamd emits on a schedule: it reads task state each run. Editing or
   completing tasks in taskmd/Obsidian is fully accounted for.
