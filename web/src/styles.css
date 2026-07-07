@@ -111,6 +111,15 @@ h3 {
   font-size: 1.05rem;
 }
 
+.brand-version {
+  align-self: flex-end;
+  color: var(--base1);
+  font-size: 0.65rem;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+  padding-bottom: 0.15rem;
+}
+
 .burger {
   font: inherit;
   font-size: 1.25rem;

@@ -88,6 +88,7 @@ function App() {
     phases: [],
     workflow: "solo",
     today: DEFAULT_TODAY_PHASES,
+    version: "",
   };
   const tasks: TaskSummary[] | null = tasksQ.data?.tasks ?? null;
   const invalid: InvalidTask[] = tasksQ.data?.invalid ?? [];
@@ -140,7 +141,11 @@ function App() {
 
   return (
     <>
-      <Header date={date} onToggleMenu={() => setMenuOpen((o) => !o)} />
+      <Header
+        date={date}
+        version={config.version}
+        onToggleMenu={() => setMenuOpen((o) => !o)}
+      />
       <div className="app-body">
         <Sidebar
           tabs={tabs}

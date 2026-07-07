@@ -6,10 +6,12 @@
 //! (idempotency), because every generated task carries a `recurring:` marker
 //! that the next run reads back.
 //!
-//! Three triggers, all defined in [`due`]:
+//! Four triggers, all defined in [`due`]:
 //!   - `after_completion`: due N days after the last occurrence was *completed*.
 //!   - `calendar`: due `lead_days` before a fixed annual date, once per year.
 //!   - `monthly`: due `lead_days` before a fixed day of the month, once per month.
+//!   - `weekly`: due on a fixed weekday, once per ISO week (catches up later in
+//!     the week if a run is missed).
 
 use std::ffi::OsString;
 use std::fs;
@@ -353,8 +355,8 @@ pub struct Report {
 
 /// Does an existing task's `recurring` marker belong to this rule? For
 /// after_completion the marker is exactly the key; for calendar it is
-/// `key:year` and for monthly `key:year-month`, so we match the `key:` prefix
-/// plus the trigger's discriminator shape.
+/// `key:year`, for monthly `key:year-month`, and for weekly `key:YYYY-Www`, so
+/// we match the `key:` prefix plus the trigger's discriminator shape.
 fn marker_belongs(marker: &str, rule: &Rule) -> bool {
     let discriminator = marker
         .strip_prefix(&rule.key)
@@ -364,6 +366,7 @@ fn marker_belongs(marker: &str, rule: &Rule) -> bool {
         Trigger::Calendar => discriminator
             .is_some_and(|year| year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit())),
         Trigger::Monthly => discriminator.is_some_and(is_year_month),
+        Trigger::Weekly => discriminator.is_some_and(is_iso_week),
     }
 }
 
@@ -376,6 +379,16 @@ fn is_year_month(s: &str) -> bool {
         && b[5..].iter().all(u8::is_ascii_digit)
 }
 
+/// Is `s` a `YYYY-Www` discriminator (as produced by [`due::weekly_due`])?
+fn is_iso_week(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 8
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b[5] == b'W'
+        && b[6..].iter().all(u8::is_ascii_digit)
+}
+
 /// Decide whether `rule` is due today given the tasks already in the vault.
 /// Returns the `recurring` marker to stamp on the new task, or `None` to skip.
 ///
@@ -386,6 +399,9 @@ fn is_year_month(s: &str) -> bool {
 ///     already exists (which is why early completion can't re-trigger).
 ///   - monthly: like calendar, with a `year-month` discriminator instead of a
 ///     year.
+///   - weekly: an open task blocks (never two at once); otherwise due once per
+///     ISO week when today is on or after the pinned weekday, keyed by a
+///     `YYYY-Www` discriminator so early completion can't re-trigger the week.
 fn decide(rule: &Rule, existing: &[ExistingTask], today: NaiveDate) -> Result<Option<String>> {
     let mine: Vec<&ExistingTask> = existing
         .iter()
@@ -429,6 +445,26 @@ fn decide(rule: &Rule, existing: &[ExistingTask], today: NaiveDate) -> Result<Op
             match due::monthly_due(today, day, lead) {
                 Some(ym) => {
                     let marker = format!("{}:{ym}", rule.key);
+                    let exists = mine.iter().any(|t| t.recurring.as_deref() == Some(&marker));
+                    Ok((!exists).then_some(marker))
+                }
+                None => Ok(None),
+            }
+        }
+        Trigger::Weekly => {
+            let dow = rule
+                .day_of_week
+                .as_deref()
+                .context("weekly needs day_of_week")?;
+            let target = due::parse_weekday(dow).context("weekly needs a valid day_of_week")?;
+            // Open-task guard first: the explicit contract is one task per week,
+            // never two, even if a prior week's task is still open.
+            if mine.iter().any(|t| t.is_open()) {
+                return Ok(None);
+            }
+            match due::weekly_due(today, target) {
+                Some(week) => {
+                    let marker = format!("{}:{week}", rule.key);
                     let exists = mine.iter().any(|t| t.recurring.as_deref() == Some(&marker));
                     Ok((!exists).then_some(marker))
                 }
@@ -804,12 +840,15 @@ mod tests {
     const CAL: &str = "- key: bday\n  title: Birthday\n  trigger: calendar\n  annual: \"07-20\"\n  lead_days: 10\n";
     const MONTHLY: &str =
         "- key: topup\n  title: Top up\n  trigger: monthly\n  day_of_month: 12\n  lead_days: 7\n";
+    const WEEKLY: &str =
+        "- key: linkedin\n  title: LinkedIn\n  trigger: weekly\n  day_of_week: fri\n";
 
     #[test]
     fn marker_belongs_matches_correctly() {
         let after = &rule::load_rules(AFTER).unwrap()[0];
         let cal = &rule::load_rules(CAL).unwrap()[0];
         let monthly = &rule::load_rules(MONTHLY).unwrap()[0];
+        let weekly = &rule::load_rules(WEEKLY).unwrap()[0];
         assert!(marker_belongs("checkin", after));
         assert!(!marker_belongs("checkin:2026", after));
         assert!(marker_belongs("bday:2026", cal));
@@ -824,6 +863,13 @@ mod tests {
         assert!(!marker_belongs("topup:20x6-07", monthly));
         assert!(!marker_belongs("topup:2026_07", monthly));
         assert!(!marker_belongs("other:2026-07", monthly));
+        assert!(marker_belongs("linkedin:2026-W28", weekly));
+        assert!(!marker_belongs("linkedin", weekly));
+        assert!(!marker_belongs("linkedin:2026", weekly));
+        assert!(!marker_belongs("linkedin:2026-07", weekly)); // month, not week
+        assert!(!marker_belongs("linkedin:2026-Wxx", weekly));
+        assert!(!marker_belongs("linkedin:2026_W28", weekly));
+        assert!(!marker_belongs("other:2026-W28", weekly));
     }
 
     #[test]
@@ -1002,6 +1048,104 @@ mod tests {
     }
 
     #[test]
+    fn weekly_creates_once_per_iso_week_on_the_day() {
+        let (vault, config) = vault_with_rules(WEEKLY);
+        // Before Friday: nothing.
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 9), false).unwrap(),
+            Report::default()
+        );
+        // Friday 2026-07-10 is ISO 2026-W28.
+        let r = generate(&vault, &config, day(2026, 7, 10), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        assert_eq!(r.created[0].marker, "linkedin:2026-W28");
+    }
+
+    #[test]
+    fn weekly_open_task_blocks_second_creation() {
+        let (vault, config) = vault_with_rules(WEEKLY);
+        let r = generate(&vault, &config, day(2026, 7, 10), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        // Same-day rerun: the open task blocks a duplicate.
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 10), false).unwrap(),
+            Report::default()
+        );
+        // A catch-up run on Saturday must also not create a second one.
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 11), false).unwrap(),
+            Report::default()
+        );
+    }
+
+    #[test]
+    fn weekly_catches_up_when_run_late_in_week() {
+        let (vault, config) = vault_with_rules(WEEKLY);
+        // generate never ran on Friday; first run is Sunday 2026-07-12, still
+        // W28 -> it fires to catch up.
+        let r = generate(&vault, &config, day(2026, 7, 12), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        assert_eq!(r.created[0].marker, "linkedin:2026-W28");
+    }
+
+    #[test]
+    fn weekly_survives_early_completion_same_week() {
+        let (vault, config) = vault_with_rules(WEEKLY);
+        let r = generate(&vault, &config, day(2026, 7, 10), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        // Complete it early, still inside W28.
+        let path = vault.join("tasks").join(&r.created[0].filename);
+        let content = fs::read_to_string(&path)
+            .unwrap()
+            .replace("status: pending", "status: completed");
+        fs::write(&path, content).unwrap();
+        // Rerun later in the same week: the week marker blocks re-creation even
+        // though no task is open.
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 12), false).unwrap(),
+            Report::default()
+        );
+    }
+
+    #[test]
+    fn weekly_next_week_creates_again() {
+        let (vault, config) = vault_with_rules(WEEKLY);
+        // A prior week's task, completed. 2026-07-03 (Fri) is ISO 2026-W27.
+        let old = "---\nid: \"001\"\nstatus: completed\nrecurring: \"linkedin:2026-W27\"\ncompleted_at: 2026-07-03\n---\n";
+        fs::write(vault.join("tasks/001-linkedin.md"), old).unwrap();
+        // The next Friday opens W28: a new occurrence appears.
+        let r = generate(&vault, &config, day(2026, 7, 10), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        assert_eq!(r.created[0].marker, "linkedin:2026-W28");
+    }
+
+    #[test]
+    fn weekly_missed_week_is_not_backfilled() {
+        let (vault, config) = vault_with_rules(WEEKLY);
+        // W27's task was completed; W28 was never generated (a fully missed
+        // week). On a Friday in W29 only the current week is created, not W28.
+        let old = "---\nid: \"001\"\nstatus: completed\nrecurring: \"linkedin:2026-W27\"\ncompleted_at: 2026-07-03\n---\n";
+        fs::write(vault.join("tasks/001-linkedin.md"), old).unwrap();
+        // 2026-07-17 is Friday of ISO 2026-W29.
+        let r = generate(&vault, &config, day(2026, 7, 17), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        assert_eq!(r.created[0].marker, "linkedin:2026-W29");
+    }
+
+    #[test]
+    fn weekly_lingering_open_task_from_prior_week_blocks() {
+        let (vault, config) = vault_with_rules(WEEKLY);
+        // Last week's task is still open (never completed). The one-at-a-time
+        // guard means this week does not pile a second task on top.
+        let open = "---\nid: \"001\"\nstatus: pending\nrecurring: \"linkedin:2026-W27\"\n---\n";
+        fs::write(vault.join("tasks/001-linkedin.md"), open).unwrap();
+        assert_eq!(
+            generate(&vault, &config, day(2026, 7, 10), false).unwrap(),
+            Report::default()
+        );
+    }
+
+    #[test]
     fn dry_run_writes_nothing_but_reports() {
         let (vault, config) = vault_with_rules(AFTER);
         let r = generate(&vault, &config, day(2026, 7, 1), true).unwrap();
@@ -1132,6 +1276,7 @@ mod tests {
             annual: None,
             lead_days: None,
             day_of_month: None,
+            day_of_week: None,
             phase: None,
             priority: None,
             tags: vec![],
@@ -1179,6 +1324,21 @@ mod tests {
         let mut r = bare_rule(Trigger::Monthly);
         r.day_of_month = Some(12);
         assert!(decide(&r, &[], day(2026, 7, 1)).is_err());
+    }
+
+    #[test]
+    fn decide_weekly_missing_day_of_week_errors() {
+        let r = bare_rule(Trigger::Weekly);
+        assert!(decide(&r, &[], day(2026, 7, 10)).is_err());
+    }
+
+    #[test]
+    fn decide_weekly_invalid_day_of_week_errors() {
+        // decide is reachable with an unvalidated rule; a bad weekday errors
+        // rather than silently skipping.
+        let mut r = bare_rule(Trigger::Weekly);
+        r.day_of_week = Some("friday".into());
+        assert!(decide(&r, &[], day(2026, 7, 10)).is_err());
     }
 
     #[test]

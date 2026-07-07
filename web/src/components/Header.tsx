@@ -1,8 +1,10 @@
 export function Header({
   date,
+  version,
   onToggleMenu,
 }: {
   date: string;
+  version: string;
   onToggleMenu: () => void;
 }) {
   return (
@@ -21,6 +23,7 @@ export function Header({
         <a href="#/" className="brand">
           karamd
         </a>
+        {version && <span className="brand-version">v{version}</span>}
       </div>
       <span className="header-date">{date}</span>
     </header>

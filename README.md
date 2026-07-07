@@ -47,7 +47,7 @@ when a rule is due. Idempotent: running it repeatedly on the same day never
 creates duplicates. Dedup is a `recurring: <key>` frontmatter field on every
 generated task.
 
-Three trigger kinds:
+Four trigger kinds:
 
 - **after_completion** — next task appears N days after the *last one was
   completed* (interval-from-completion, e.g. a periodic check-in every ~18d).
@@ -58,6 +58,11 @@ Three trigger kinds:
   per month (dedup marker `key:YYYY-MM`, e.g. a bill due on the 12th surfaced a
   week early). Days 29-31 clamp to the month's last day, so `31` still fires in
   February; `lead_days` is limited to 0-27 so windows never overlap.
+- **weekly** — task appears on a fixed `day_of_week` (`mon`…`sun`), once per ISO
+  week (dedup marker `key:YYYY-Www`, e.g. a LinkedIn review every Friday). Runs
+  on or after that weekday catch up within the same week (Sat/Sun still fire a
+  missed Friday); a fully missed week is not backfilled. An open task for the
+  key blocks a second one, so there is never more than one at a time.
 
 These are genuinely different triggers. karamd reads task *state* each run
 rather than blindly emitting on a schedule, so none piles up duplicates.

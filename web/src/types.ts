@@ -80,6 +80,8 @@ export interface Config {
   // always carries a value (the server applies the default when config omits
   // `web.today`), so the client never hardcodes the grouping.
   today: string[];
+  // karamd's version, shown small and dim in the header.
+  version: string;
 }
 
 export interface NextItem {

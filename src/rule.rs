@@ -19,6 +19,8 @@ pub enum Trigger {
     Calendar,
     /// Due `lead_days` before a fixed day of the month, once per month.
     Monthly,
+    /// Due on a fixed weekday, once per ISO week (catches up later in the week).
+    Weekly,
 }
 
 /// One recurring-task definition from the rules file. Serializes back to the
@@ -42,6 +44,10 @@ pub struct Rule {
     /// month's last day, so `31` still fires in 30-day months and February).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_of_month: Option<u32>,
+    /// weekly: the weekday the task recurs on, one of `mon`,`tue`,`wed`,`thu`,
+    /// `fri`,`sat`,`sun`. Any other value is rejected by [`Rule::validate`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub day_of_week: Option<String>,
     /// calendar/monthly: how many days before the occurrence the task should
     /// appear.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,6 +115,17 @@ impl Rule {
                     bail!("rule `{}`: monthly `lead_days` must be 0-27", self.key);
                 }
             }
+            Trigger::Weekly => {
+                let dow = self.day_of_week.as_deref().with_context(|| {
+                    format!("rule `{}`: weekly requires `day_of_week`", self.key)
+                })?;
+                if crate::due::parse_weekday(dow).is_none() {
+                    bail!(
+                        "rule `{}`: `day_of_week` must be one of mon,tue,wed,thu,fri,sat,sun",
+                        self.key
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -173,12 +190,16 @@ mod tests {
   trigger: monthly
   day_of_month: 12
   lead_days: 7
+- key: linkedin-weekly
+  title: "Evaluate and schedule LinkedIn posts"
+  trigger: weekly
+  day_of_week: fri
 "#;
 
     #[test]
     fn parses_all_triggers() {
         let rules = load_rules(SAMPLE).unwrap();
-        assert_eq!(rules.len(), 3);
+        assert_eq!(rules.len(), 4);
         assert_eq!(rules[0].trigger, Trigger::AfterCompletion);
         assert_eq!(rules[0].every_days, Some(18));
         assert_eq!(rules[0].phase.as_deref(), Some("next"));
@@ -190,6 +211,8 @@ mod tests {
         assert_eq!(rules[2].trigger, Trigger::Monthly);
         assert_eq!(rules[2].day_of_month, Some(12));
         assert_eq!(rules[2].lead_days, Some(7));
+        assert_eq!(rules[3].trigger, Trigger::Weekly);
+        assert_eq!(rules[3].day_of_week.as_deref(), Some("fri"));
     }
 
     #[test]
@@ -280,6 +303,30 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_weekly_without_day_of_week() {
+        let raw = "- key: k\n  title: t\n  trigger: weekly\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("day_of_week"));
+    }
+
+    #[test]
+    fn validate_rejects_weekly_invalid_day_of_week() {
+        for bad in ["friday", "Fri", "5", "xyz"] {
+            let raw = format!("- key: k\n  title: t\n  trigger: weekly\n  day_of_week: {bad}\n");
+            let err = load_rules(&raw).unwrap()[0].validate().unwrap_err();
+            assert!(err.to_string().contains("day_of_week"));
+        }
+    }
+
+    #[test]
+    fn validate_accepts_weekly_all_weekdays() {
+        for dow in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] {
+            let raw = format!("- key: k\n  title: t\n  trigger: weekly\n  day_of_week: {dow}\n");
+            load_rules(&raw).unwrap()[0].validate().unwrap();
+        }
+    }
+
+    #[test]
     fn validate_accepts_leap_day_annual() {
         let raw =
             "- key: k\n  title: t\n  trigger: calendar\n  annual: \"02-29\"\n  lead_days: 5\n";
@@ -337,10 +384,11 @@ mod tests {
         assert!(!yaml.contains("null"));
         assert!(yaml.contains("trigger: after_completion"));
         let reparsed = load_rules(&yaml).unwrap();
-        assert_eq!(reparsed.len(), 3);
+        assert_eq!(reparsed.len(), 4);
         assert_eq!(reparsed[0].every_days, Some(18));
         assert_eq!(reparsed[1].annual.as_deref(), Some("07-20"));
         assert_eq!(reparsed[2].day_of_month, Some(12));
+        assert_eq!(reparsed[3].day_of_week.as_deref(), Some("fri"));
     }
 
     #[test]
@@ -361,7 +409,7 @@ mod tests {
             .collect();
         assert_eq!(entries, vec![".taskmd.recurring.yaml".to_string()]);
         let reparsed = load_rules(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(reparsed.len(), 3);
+        assert_eq!(reparsed.len(), 4);
         // Overwriting an existing file works too.
         write_rules(&path, &rules[..1]).unwrap();
         assert_eq!(

@@ -4,6 +4,19 @@ All notable changes to karamd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-07
+
+### Added
+
+- New `weekly` recurring trigger: a task recurs on a fixed `day_of_week`
+  (`mon`…`sun`), once per ISO week, with dedup marker `key:YYYY-Www`. It fires on
+  or after that weekday within the week, so a run that misses the target day
+  still catches up (Sat/Sun cover a missed Friday); a fully missed week is not
+  backfilled. An open task for the key blocks a second, so there is never more
+  than one at a time. Motivating case: a weekly review that must always land on a
+  Friday. `day_of_week` accepts only the lowercase three-letter form; anything
+  else fails `validate`.
+
 ## [0.4.0] - 2026-07-06
 
 ### Added

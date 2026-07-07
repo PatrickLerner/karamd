@@ -182,6 +182,8 @@ struct ConfigOut {
     /// Phase ids the web "Today" tab merges, in render order (config-driven,
     /// with a default when `web.today` is unset).
     today: Vec<String>,
+    /// karamd's own version (from `CARGO_PKG_VERSION`), shown in the web header.
+    version: String,
 }
 
 #[derive(Serialize)]
@@ -370,6 +372,7 @@ async fn get_config(State(state): State<AppState>) -> std::result::Result<Respon
         phases,
         workflow,
         today,
+        version: env!("CARGO_PKG_VERSION").to_string(),
     })
     .into_response())
 }
@@ -811,6 +814,7 @@ mod tests {
         let (status, body) = call(&root, get("/api/config")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["workflow"], "pr-review");
+        assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(body["phases"][0]["id"], "v1");
         assert_eq!(body["phases"][1]["name"], "Two");
         // Today grouping comes from `web.today`, verbatim.

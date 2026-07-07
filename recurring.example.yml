@@ -33,6 +33,18 @@
   priority: medium
   tags: [finance]
 
+# Fixed weekday, once per ISO week (dedup marker key:YYYY-Www). The task lands
+# on `day_of_week` (mon|tue|wed|thu|fri|sat|sun); a run later in the same week
+# still catches up (Sat/Sun fire a missed Friday), but a fully missed week is
+# not backfilled. An open task for the key blocks a second one, so you always
+# have exactly one, never two.
+- key: linkedin-weekly
+  title: "Evaluate and schedule LinkedIn posts"
+  trigger: weekly
+  day_of_week: fri
+  priority: medium
+  tags: [marketing]
+
 # Optional `body`: markdown for the generated task, replacing the default
 # `## Objective / ## Tasks / ## Acceptance Criteria` TODO stub. Omit it to keep
 # the stub. karamd still writes the frontmatter, the `# <title>` heading, and a

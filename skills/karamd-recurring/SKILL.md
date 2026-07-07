@@ -1,6 +1,6 @@
 ---
 name: karamd-recurring
-description: The karamd recurring-rules config format (`.taskmd.recurring.yaml`): rule fields, the three triggers (after_completion, calendar, monthly), optional body, and the dedup markers karamd stamps on generated tasks. Use when authoring or editing a `.taskmd.recurring.yaml` file, or explaining how karamd decides a recurring task is due.
+description: The karamd recurring-rules config format (`.taskmd.recurring.yaml`): rule fields, the four triggers (after_completion, calendar, monthly, weekly), optional body, and the dedup markers karamd stamps on generated tasks. Use when authoring or editing a `.taskmd.recurring.yaml` file, or explaining how karamd decides a recurring task is due.
 ---
 
 # karamd recurring rules (`.taskmd.recurring.yaml`)
@@ -22,7 +22,7 @@ Every rule requires:
 |-------|---------|
 | `key` | Dedup marker, unique across the whole file. Groups a rule's tasks. |
 | `title` | Task title (becomes the `# <title>` heading). |
-| `trigger` | One of `after_completion`, `calendar`, `monthly`. |
+| `trigger` | One of `after_completion`, `calendar`, `monthly`, `weekly`. |
 
 Trigger-specific fields:
 
@@ -36,6 +36,13 @@ Trigger-specific fields:
   before that day of the month, once per month. Days 29-31 clamp to the month's
   last day, so `31` still fires in February. `lead_days` is capped at 27 so
   windows never overlap.
+- **`weekly`**: `day_of_week` (`mon`|`tue`|`wed`|`thu`|`fri`|`sat`|`sun`, exactly
+  that lowercase three-letter form; anything else is rejected). Due on that
+  weekday, once per ISO week. A run on or after the day within the same ISO week
+  still fires (Sat/Sun catch up a missed Friday); a fully missed week is not
+  backfilled. Like `after_completion`, an open task for the key blocks a second,
+  so there is never more than one at a time. No `lead_days`: weekly is strictly
+  on-or-after the day.
 
 Optional on any rule:
 
@@ -64,8 +71,10 @@ how it avoids duplicates. The exact form encodes the period:
 - `after_completion` → `recurring: <key>`
 - `calendar` → `recurring: "<key>:<year>"`
 - `monthly` → `recurring: "<key>:YYYY-MM"`
+- `weekly` → `recurring: "<key>:YYYY-Www"` (ISO week, e.g. `linkedin:2026-W28`;
+  the ISO year can differ from the calendar year near Jan 1)
 
-The year/month suffix is what makes "once per period" hold even if the task is
+The period suffix is what makes "once per period" hold even if the task is
 completed early inside its lead window. This is an unknown field to taskmd, so
 taskmd/Obsidian preserve it verbatim on edit (see `taskmd-format`).
 
@@ -76,6 +85,15 @@ An *open* task for the key blocks re-creation. Otherwise the rule is due when
 recent terminal task's `completed_at`, else `cancelled_at`, else `created_at`.
 Cancelling an occurrence keeps the series: the next one schedules `every_days`
 after the `cancelled_at`, not immediately. A never-run key is due.
+
+### How due-ness reads state (weekly)
+
+Two guards, both applied. First, an *open* task for the key blocks a second (so a
+lingering task from a prior week does not pile up). Then, if today's ISO weekday
+is on or after `day_of_week`, the current ISO week's `YYYY-Www` marker is used;
+if a task already carries that marker (e.g. it was completed early this week),
+nothing is created. The discriminator is always the *current* ISO week, so a
+fully skipped week is never backfilled.
 
 ## Example file
 
@@ -106,6 +124,15 @@ after the `cancelled_at`, not immediately. A never-run key is due.
   lead_days: 7
   priority: medium
   tags: [finance]
+
+# Fixed weekday, once per ISO week (marker key:YYYY-Www). Lands on Friday;
+# a later run in the same week catches up.
+- key: linkedin-weekly
+  title: "Evaluate and schedule LinkedIn posts"
+  trigger: weekly
+  day_of_week: fri
+  priority: medium
+  tags: [marketing]
 
 # Optional body replacing the TODO stub.
 - key: quarterly-backup

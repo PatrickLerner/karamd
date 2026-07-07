@@ -2,7 +2,7 @@
 //! explicitly so tests are deterministic and never touch the clock.
 
 use anyhow::{Context, Result};
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, Weekday};
 
 /// after_completion: due when at least `every_days` have elapsed since the last
 /// completion. A rule that has never produced a completed task (`None`) is due
@@ -91,6 +91,38 @@ pub fn monthly_due(today: NaiveDate, day_of_month: u32, lead_days: i64) -> Optio
         };
     }
     None
+}
+
+/// Parse a canonical lowercase three-letter weekday (`mon`..`sun`). Deliberately
+/// strict: only these seven exact forms are accepted so a rules-file typo fails
+/// loudly instead of being coerced by a lenient parser.
+pub fn parse_weekday(s: &str) -> Option<Weekday> {
+    Some(match s {
+        "mon" => Weekday::Mon,
+        "tue" => Weekday::Tue,
+        "wed" => Weekday::Wed,
+        "thu" => Weekday::Thu,
+        "fri" => Weekday::Fri,
+        "sat" => Weekday::Sat,
+        "sun" => Weekday::Sun,
+        _ => return None,
+    })
+}
+
+/// weekly: once per ISO week, pinned to the `target` weekday. Due when today is
+/// on or after `target` within the current ISO week, returning that week's
+/// `YYYY-Www` discriminator (the dedup marker suffix). Because the run compares
+/// weekdays inside one Monday-Sunday ISO week, a `generate` that misses the
+/// target day still fires on the following days (Sat/Sun for a Friday rule) to
+/// catch up, then resets next week. A fully missed week is never backfilled: the
+/// discriminator is always the *current* ISO week, never a past one.
+pub fn weekly_due(today: NaiveDate, target: Weekday) -> Option<String> {
+    if today.weekday().number_from_monday() >= target.number_from_monday() {
+        let iso = today.iso_week();
+        Some(format!("{:04}-W{:02}", iso.year(), iso.week()))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -268,6 +300,88 @@ mod tests {
         assert_eq!(
             monthly_due(d(2026, 6, 28), 31, 7),
             Some("2026-06".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_weekday_accepts_all_seven() {
+        assert_eq!(parse_weekday("mon"), Some(Weekday::Mon));
+        assert_eq!(parse_weekday("tue"), Some(Weekday::Tue));
+        assert_eq!(parse_weekday("wed"), Some(Weekday::Wed));
+        assert_eq!(parse_weekday("thu"), Some(Weekday::Thu));
+        assert_eq!(parse_weekday("fri"), Some(Weekday::Fri));
+        assert_eq!(parse_weekday("sat"), Some(Weekday::Sat));
+        assert_eq!(parse_weekday("sun"), Some(Weekday::Sun));
+    }
+
+    #[test]
+    fn parse_weekday_rejects_other_forms() {
+        // Long names, capitalisation, and integers are all rejected: the rules
+        // file must use the one canonical form.
+        for bad in ["Fri", "friday", "5", "", "mo", "fri "] {
+            assert_eq!(parse_weekday(bad), None);
+        }
+    }
+
+    #[test]
+    fn weekly_before_target_day_not_due() {
+        // Thu 2026-07-09, rule pinned to Friday: not yet due this ISO week.
+        assert_eq!(weekly_due(d(2026, 7, 9), Weekday::Fri), None);
+    }
+
+    #[test]
+    fn weekly_on_target_day_is_due() {
+        // Fri 2026-07-10 is ISO 2026-W28.
+        assert_eq!(
+            weekly_due(d(2026, 7, 10), Weekday::Fri),
+            Some("2026-W28".to_string())
+        );
+    }
+
+    #[test]
+    fn weekly_after_target_day_catches_up_same_week() {
+        // Sat and Sun of the same ISO week still fire (self-healing) with the
+        // same discriminator, so a late run is not missed.
+        assert_eq!(
+            weekly_due(d(2026, 7, 11), Weekday::Fri),
+            Some("2026-W28".to_string())
+        );
+        assert_eq!(
+            weekly_due(d(2026, 7, 12), Weekday::Fri),
+            Some("2026-W28".to_string())
+        );
+    }
+
+    #[test]
+    fn weekly_monday_target_is_due_every_day() {
+        // A Monday rule is due Monday and every later day of the week.
+        assert_eq!(
+            weekly_due(d(2026, 7, 6), Weekday::Mon),
+            Some("2026-W28".to_string())
+        );
+        assert_eq!(
+            weekly_due(d(2026, 7, 9), Weekday::Mon),
+            Some("2026-W28".to_string())
+        );
+    }
+
+    #[test]
+    fn weekly_sunday_target_only_on_sunday() {
+        // Sat 2026-07-11 is before Sunday; Sun 2026-07-12 is due.
+        assert_eq!(weekly_due(d(2026, 7, 11), Weekday::Sun), None);
+        assert_eq!(
+            weekly_due(d(2026, 7, 12), Weekday::Sun),
+            Some("2026-W28".to_string())
+        );
+    }
+
+    #[test]
+    fn weekly_discriminator_uses_iso_year_not_calendar_year() {
+        // Fri 2027-01-01 belongs to ISO week 2026-W53: the discriminator tracks
+        // the ISO year, so a New-Year Friday is not mislabelled 2027-W01.
+        assert_eq!(
+            weekly_due(d(2027, 1, 1), Weekday::Fri),
+            Some("2026-W53".to_string())
         );
     }
 }

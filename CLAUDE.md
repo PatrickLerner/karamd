@@ -9,11 +9,15 @@ general taskmd tool: task verbs, query, ranked next, validate, web UI
   existing task files, creates a new task only when a rule is due. Must be
   **idempotent** — re-running on the same day never duplicates. Dedup marker:
   `recurring: <key>` frontmatter on generated tasks.
-- Three triggers: `after_completion` (N days after the last one was completed),
-  `calendar` (lead_days before a fixed annual date, once per year), and
-  `monthly` (lead_days before a fixed day of the month, once per month; marker
-  `key:YYYY-MM`; day 29-31 clamps to the month's last day; lead_days 0-27). The
-  code reads task *state* each run, never blindly emits on a schedule.
+- Four triggers: `after_completion` (N days after the last one was completed),
+  `calendar` (lead_days before a fixed annual date, once per year), `monthly`
+  (lead_days before a fixed day of the month, once per month; marker
+  `key:YYYY-MM`; day 29-31 clamps to the month's last day; lead_days 0-27), and
+  `weekly` (a fixed `day_of_week` `mon`..`sun`, once per ISO week; marker
+  `key:YYYY-Www`; due on or after that weekday within the week so a late run
+  catches up, a missed week is not backfilled, and an open task for the key
+  blocks a second). The code reads task *state* each run, never blindly emits on
+  a schedule.
 - **Design shift (settled in #008):** the *generator* still only adds files and
   reads completion state, but karamd as a whole is now a first-class taskmd
   writer via the `src/taskmd/` library layer (verbs, web UI edits). Completions
@@ -127,6 +131,16 @@ dropped ("prüfen" → "pr-fen"). Covered by a unit test — keep it green.
   year and next year (so a window straddling Jan 1 resolves to next year).
 - **Leap day**: `annual: "02-29"` clamps to `02-28` in common years so the rule
   still fires yearly.
+- **weekly**: `day_of_week` is one canonical form only (`mon`..`sun`, lowercase
+  three-letter); anything else (`friday`, `Fri`, `5`) is rejected by
+  `validate`. Due when `today`'s ISO weekday `>=` the target's, keyed by the
+  *current* ISO week (`chrono::iso_week`, so a New-Year Friday is `2026-W53`, not
+  `2027-W01`). Two guards, both needed: the `YYYY-Www` marker stops early
+  completion re-triggering the same week, and an *open* task for the key (even
+  from a prior week) blocks a second, so there is always exactly one. A fully
+  skipped week is never backfilled because the discriminator is always today's
+  week. No `lead_days`: weekly is strictly on-or-after the day (kept simple; add
+  a lead only if a use case appears).
 - **Per-rule body**: chose Option A — a single optional `body:` field (free
   markdown) over structured `objective/tasks/acceptance` fields. When present it
   replaces the `TODO` stub verbatim; when absent the stub is emitted unchanged so
