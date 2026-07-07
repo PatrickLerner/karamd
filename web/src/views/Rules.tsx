@@ -9,9 +9,12 @@ import { ErrorBanner } from "../components/Banner";
 import {
   PRIORITIES,
   TRIGGERS,
+  WEEKDAYS,
   type PreviewCreated,
   type Rule,
   type Trigger,
+  type Week,
+  type Weekday,
 } from "../types";
 
 // A blank rule for the "Add rule" action. after_completion is the simplest
@@ -27,6 +30,11 @@ function splitList(input: string): string[] {
     .filter((s) => s !== "");
 }
 
+// The "every N periods" suffix, shown only when an interval > 1 is set.
+function intervalNote(rule: Rule): string {
+  return rule.interval && rule.interval > 1 ? `, every ${rule.interval}` : "";
+}
+
 // A short human summary of a rule's schedule, shown on the collapsed row.
 function scheduleSummary(rule: Rule): string {
   switch (rule.trigger) {
@@ -37,8 +45,20 @@ function scheduleSummary(rule: Rule): string {
     case "calendar":
       return `on ${rule.annual ?? "MM-DD"}, ${rule.lead_days ?? 0}d lead`;
     case "monthly":
-      return `day ${rule.day_of_month ?? "?"}, ${rule.lead_days ?? 0}d lead`;
+      return `day ${rule.day_of_month ?? "?"}, ${rule.lead_days ?? 0}d lead${intervalNote(rule)}`;
+    case "weekly":
+      return `${rule.day_of_week ?? "?"}, weekly${intervalNote(rule)}`;
+    case "nth_weekday": {
+      const w = rule.week === "last" ? "last" : `#${rule.week ?? "?"}`;
+      return `${w} ${rule.day_of_week ?? "?"}, monthly${intervalNote(rule)}`;
+    }
   }
+}
+
+// Parse the `week` select value back to a `Week` (number, "last", or unset).
+function parseWeek(value: string): Week | undefined {
+  if (value === "") return undefined;
+  return value === "last" ? "last" : Number(value);
 }
 
 // Parse a numeric field back to a number, or drop it entirely when the input
@@ -168,6 +188,88 @@ function RuleFields({
               value={rule.lead_days ?? ""}
               onChange={(e) => set({ lead_days: num(e.target.value) })}
               placeholder="e.g. 3"
+            />
+          </label>
+        </div>
+      )}
+
+      {rule.trigger === "weekly" && (
+        <label>
+          Day of week
+          <select
+            value={rule.day_of_week ?? ""}
+            onChange={(e) =>
+              set({ day_of_week: (e.target.value || undefined) as Weekday | undefined })
+            }
+          >
+            <option value="">unset</option>
+            {WEEKDAYS.map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {rule.trigger === "nth_weekday" && (
+        <div className="form-row">
+          <label>
+            Day of week
+            <select
+              value={rule.day_of_week ?? ""}
+              onChange={(e) =>
+                set({ day_of_week: (e.target.value || undefined) as Weekday | undefined })
+              }
+            >
+              <option value="">unset</option>
+              {WEEKDAYS.map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Week of month
+            <select
+              value={rule.week === undefined ? "" : String(rule.week)}
+              onChange={(e) => set({ week: parseWeek(e.target.value) })}
+            >
+              <option value="">unset</option>
+              <option value="1">1st</option>
+              <option value="2">2nd</option>
+              <option value="3">3rd</option>
+              <option value="4">4th</option>
+              <option value="last">last</option>
+            </select>
+          </label>
+        </div>
+      )}
+
+      {(rule.trigger === "weekly" ||
+        rule.trigger === "monthly" ||
+        rule.trigger === "nth_weekday") && (
+        <div className="form-row">
+          <label>
+            Interval (every N periods)
+            <input
+              type="number"
+              min={1}
+              value={rule.interval ?? ""}
+              onChange={(e) => set({ interval: num(e.target.value) })}
+              placeholder="1"
+            />
+          </label>
+          <label>
+            Anchor (YYYY-MM-DD, optional)
+            <input
+              type="text"
+              value={rule.anchor ?? ""}
+              onChange={(e) =>
+                set({ anchor: e.target.value === "" ? undefined : e.target.value })
+              }
+              placeholder="e.g. 2026-07-10"
             />
           </label>
         </div>

@@ -255,7 +255,15 @@ let rules: Rule[] = [
   },
 ];
 
-const TRIGGERS: Trigger[] = ["after_completion", "calendar", "monthly"];
+const TRIGGERS: Trigger[] = [
+  "after_completion",
+  "calendar",
+  "monthly",
+  "weekly",
+  "nth_weekday",
+];
+
+const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 function slugify(input: string): string {
   return input
@@ -284,6 +292,17 @@ function validateRules(input: Rule[]): string | null {
       return `rule ${r.key} needs annual and lead_days`;
     if (r.trigger === "monthly" && (typeof r.day_of_month !== "number" || typeof r.lead_days !== "number"))
       return `rule ${r.key} needs day_of_month and lead_days`;
+    if (r.trigger === "weekly" && !WEEKDAYS.includes(r.day_of_week ?? ""))
+      return `rule ${r.key} needs a valid day_of_week`;
+    if (r.trigger === "nth_weekday") {
+      if (!WEEKDAYS.includes(r.day_of_week ?? ""))
+        return `rule ${r.key} needs a valid day_of_week`;
+      const wk = r.week;
+      const ok = wk === "last" || (typeof wk === "number" && wk >= 1 && wk <= 4);
+      if (!ok) return `rule ${r.key} needs week 1-4 or last`;
+    }
+    if (r.interval !== undefined && (typeof r.interval !== "number" || r.interval < 1))
+      return `rule ${r.key} interval must be >= 1`;
     if (r.body !== undefined && r.body.trim() === "")
       return `rule ${r.key} has an empty body`;
   }

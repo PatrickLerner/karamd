@@ -119,13 +119,36 @@ export type TaskPatch = Partial<{
   body: string;
 }>;
 
-export type Trigger = "after_completion" | "calendar" | "monthly";
+export type Trigger =
+  | "after_completion"
+  | "calendar"
+  | "monthly"
+  | "weekly"
+  | "nth_weekday";
 
 export const TRIGGERS: Trigger[] = [
   "after_completion",
   "calendar",
   "monthly",
+  "weekly",
+  "nth_weekday",
 ];
+
+// Weekday form accepted by weekly / nth_weekday rules.
+export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+export const WEEKDAYS: Weekday[] = [
+  "mon",
+  "tue",
+  "wed",
+  "thu",
+  "fri",
+  "sat",
+  "sun",
+];
+
+// nth_weekday `week`: 1-4 or the keyword "last".
+export type Week = number | "last";
 
 export interface Rule {
   key: string;
@@ -134,7 +157,11 @@ export interface Rule {
   every_days?: number;
   annual?: string;
   day_of_month?: number;
+  day_of_week?: Weekday;
+  week?: Week;
   lead_days?: number;
+  interval?: number;
+  anchor?: string;
   phase?: string;
   priority?: string;
   tags?: string[];

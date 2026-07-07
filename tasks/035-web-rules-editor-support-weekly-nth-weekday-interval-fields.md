@@ -1,7 +1,7 @@
 ---
 id: '035'
 title: 'Web Rules editor: support weekly + nth_weekday + interval fields'
-status: pending
+status: completed
 created_at: 2026-07-07
 priority: medium
 type: feature
@@ -11,6 +11,7 @@ tags:
 dependencies:
 - '033'
 - '034'
+completed_at: 2026-07-07
 ---
 
 ## Objective
