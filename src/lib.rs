@@ -392,6 +392,18 @@ fn is_iso_week(s: &str) -> bool {
         && b[6..].iter().all(u8::is_ascii_digit)
 }
 
+/// Parse a rule's optional `anchor` date for the due-check (already accepted by
+/// validation upstream; re-parsed here as `YYYY-MM-DD`).
+fn parse_anchor(rule: &Rule) -> Result<Option<NaiveDate>> {
+    rule.anchor
+        .as_deref()
+        .map(|s| {
+            NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .with_context(|| format!("rule `{}`: invalid anchor date", rule.key))
+        })
+        .transpose()
+}
+
 /// Decide whether `rule` is due today given the tasks already in the vault.
 /// Returns the `recurring` marker to stamp on the new task, or `None` to skip.
 ///
@@ -408,6 +420,9 @@ fn is_iso_week(s: &str) -> bool {
 ///   - nth_weekday: like weekly but scoped to the month — an open task blocks;
 ///     otherwise due once per month when today is on or after the Nth/last
 ///     weekday, keyed by a `YYYY-MM` discriminator.
+///
+/// `interval`/`anchor` (weekly/monthly/nth_weekday) further gate which periods
+/// are eligible (the `due` cadence check).
 fn decide(rule: &Rule, existing: &[ExistingTask], today: NaiveDate) -> Result<Option<String>> {
     let mine: Vec<&ExistingTask> = existing
         .iter()
@@ -448,7 +463,9 @@ fn decide(rule: &Rule, existing: &[ExistingTask], today: NaiveDate) -> Result<Op
         Trigger::Monthly => {
             let day = rule.day_of_month.context("monthly needs day_of_month")?;
             let lead = rule.lead_days.context("monthly needs lead_days")?;
-            match due::monthly_due(today, day, lead) {
+            let interval = rule.interval.unwrap_or(1);
+            let anchor = parse_anchor(rule)?;
+            match due::monthly_due_every(today, day, lead, interval, anchor) {
                 Some(ym) => {
                     let marker = format!("{}:{ym}", rule.key);
                     let exists = mine.iter().any(|t| t.recurring.as_deref() == Some(&marker));
@@ -463,12 +480,14 @@ fn decide(rule: &Rule, existing: &[ExistingTask], today: NaiveDate) -> Result<Op
                 .as_deref()
                 .context("weekly needs day_of_week")?;
             let target = due::parse_weekday(dow).context("weekly needs a valid day_of_week")?;
+            let interval = rule.interval.unwrap_or(1);
+            let anchor = parse_anchor(rule)?;
             // Open-task guard first: the explicit contract is one task per week,
             // never two, even if a prior week's task is still open.
             if mine.iter().any(|t| t.is_open()) {
                 return Ok(None);
             }
-            match due::weekly_due(today, target) {
+            match due::weekly_due_every(today, target, interval, anchor) {
                 Some(week) => {
                     let marker = format!("{}:{week}", rule.key);
                     let exists = mine.iter().any(|t| t.recurring.as_deref() == Some(&marker));
@@ -490,11 +509,13 @@ fn decide(rule: &Rule, existing: &[ExistingTask], today: NaiveDate) -> Result<Op
                 .context("nth_weekday needs week")?
                 .ordinal()
                 .context("nth_weekday needs a valid week")?;
+            let interval = rule.interval.unwrap_or(1);
+            let anchor = parse_anchor(rule)?;
             // Same one-at-a-time guard as weekly.
             if mine.iter().any(|t| t.is_open()) {
                 return Ok(None);
             }
-            match due::nth_weekday_due(today, target, ord) {
+            match due::nth_weekday_due_every(today, target, ord, interval, anchor) {
                 Some(ym) => {
                     let marker = format!("{}:{ym}", rule.key);
                     let exists = mine.iter().any(|t| t.recurring.as_deref() == Some(&marker));
@@ -1238,6 +1259,32 @@ mod tests {
     }
 
     #[test]
+    fn weekly_interval_skips_off_weeks_end_to_end() {
+        // Biweekly LinkedIn review anchored on Fri 2026-07-10 (W28).
+        let yaml = "- key: linkedin\n  title: LinkedIn\n  trigger: weekly\n  day_of_week: fri\n  interval: 2\n  anchor: 2026-07-10\n";
+        let (vault, config) = vault_with_rules(yaml);
+        // On-cadence week fires.
+        let r = generate(&vault, &config, day(2026, 7, 10), false).unwrap();
+        assert_eq!(r.created.len(), 1);
+        assert_eq!(r.created[0].marker, "linkedin:2026-W28");
+        // Off-cadence week (W29) in a fresh vault: nothing.
+        let (v2, c2) = vault_with_rules(yaml);
+        assert_eq!(
+            generate(&v2, &c2, day(2026, 7, 17), false).unwrap(),
+            Report::default()
+        );
+    }
+
+    #[test]
+    fn decide_weekly_bad_anchor_errors() {
+        let mut r = bare_rule(Trigger::Weekly);
+        r.day_of_week = Some("fri".into());
+        r.interval = Some(2);
+        r.anchor = Some("not-a-date".into());
+        assert!(decide(&r, &[], day(2026, 7, 10)).is_err());
+    }
+
+    #[test]
     fn decide_nth_weekday_missing_day_of_week_errors() {
         let mut r = bare_rule(Trigger::NthWeekday);
         r.week = Some(rule::Week::Nth(1));
@@ -1400,6 +1447,8 @@ mod tests {
             day_of_month: None,
             day_of_week: None,
             week: None,
+            interval: None,
+            anchor: None,
             phase: None,
             priority: None,
             tags: vec![],

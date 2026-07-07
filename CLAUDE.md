@@ -20,6 +20,12 @@ general taskmd tool: task verbs, query, ranked next, validate, web UI
   of the month, once per month; marker `key:YYYY-MM`; on-or-after within the
   month, open-task guard, like weekly but month-scoped). The code reads task
   *state* each run, never blindly emits on a schedule.
+- `weekly`/`monthly`/`nth_weekday` also take an optional `interval` (every Nth
+  period, default 1) + `anchor` (`YYYY-MM-DD` on the cadence; omitted aligns to a
+  fixed epoch). `interval: 1` is a no-op so existing rules are unaffected; the
+  discriminator/marker shapes are unchanged (interval only gates which periods
+  are eligible). Cadence math lives in `due::on_cadence` over a monotonic period
+  index (ISO-week index for weekly, `year*12+month` for monthly/nth_weekday).
 - **Design shift (settled in #008):** the *generator* still only adds files and
   reads completion state, but karamd as a whole is now a first-class taskmd
   writer via the `src/taskmd/` library layer (verbs, web UI edits). Completions

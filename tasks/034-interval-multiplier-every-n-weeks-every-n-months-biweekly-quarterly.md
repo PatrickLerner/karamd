@@ -1,12 +1,13 @@
 ---
 id: '034'
 title: 'interval multiplier: every-N-weeks / every-N-months (biweekly, quarterly)'
-status: pending
+status: completed
 created_at: 2026-07-07
 priority: medium
 type: feature
 tags:
 - generator
+completed_at: 2026-07-07
 ---
 
 ## Objective

@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 /// Which due-check governs a rule.
@@ -67,9 +68,9 @@ impl Trigger {
         match self {
             Trigger::AfterCompletion => &["every_days"],
             Trigger::Calendar => &["annual", "lead_days"],
-            Trigger::Monthly => &["day_of_month", "lead_days"],
-            Trigger::Weekly => &["day_of_week"],
-            Trigger::NthWeekday => &["day_of_week", "week"],
+            Trigger::Monthly => &["day_of_month", "lead_days", "interval", "anchor"],
+            Trigger::Weekly => &["day_of_week", "interval", "anchor"],
+            Trigger::NthWeekday => &["day_of_week", "week", "interval", "anchor"],
         }
     }
 }
@@ -108,6 +109,14 @@ pub struct Rule {
     /// appear.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead_days: Option<i64>,
+    /// weekly/monthly/nth_weekday: run only every Nth period (default 1 = every
+    /// period). Must be >= 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval: Option<u32>,
+    /// Cadence anchor (`YYYY-MM-DD`) for `interval`: a date on the desired
+    /// cadence. Omitted aligns the cadence to a fixed epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,6 +145,17 @@ impl Rule {
         // trigger would silently ignore it. Reject it before the per-trigger
         // required-field checks so such mistakes fail loudly.
         self.reject_foreign_fields()?;
+        // `interval`/`anchor` are only reachable here for the triggers that own
+        // them (the foreign-field check ran first). Validate their values.
+        if let Some(interval) = self.interval
+            && interval == 0
+        {
+            bail!("rule `{}`: `interval` must be >= 1", self.key);
+        }
+        if let Some(anchor) = &self.anchor {
+            NaiveDate::parse_from_str(anchor, "%Y-%m-%d")
+                .with_context(|| format!("rule `{}`: `anchor` must be YYYY-MM-DD", self.key))?;
+        }
         match self.trigger {
             Trigger::AfterCompletion => {
                 if self.every_days.is_none() {
@@ -214,13 +234,15 @@ impl Rule {
     /// owned by exactly one or two triggers (see [`Trigger::owned_fields`]).
     fn reject_foreign_fields(&self) -> Result<()> {
         let owned = self.trigger.owned_fields();
-        let present: [(&str, bool); 6] = [
+        let present: [(&str, bool); 8] = [
             ("every_days", self.every_days.is_some()),
             ("annual", self.annual.is_some()),
             ("day_of_month", self.day_of_month.is_some()),
             ("day_of_week", self.day_of_week.is_some()),
             ("lead_days", self.lead_days.is_some()),
             ("week", self.week.is_some()),
+            ("interval", self.interval.is_some()),
+            ("anchor", self.anchor.is_some()),
         ];
         for (name, is_set) in present {
             if is_set && !owned.contains(&name) {
@@ -554,6 +576,43 @@ mod tests {
             );
             load_rules(&raw).unwrap()[0].validate().unwrap();
         }
+    }
+
+    #[test]
+    fn validate_rejects_zero_interval() {
+        let raw = "- key: k\n  title: t\n  trigger: weekly\n  day_of_week: fri\n  interval: 0\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("interval"));
+    }
+
+    #[test]
+    fn validate_rejects_bad_anchor() {
+        let raw = "- key: k\n  title: t\n  trigger: weekly\n  day_of_week: fri\n  interval: 2\n  anchor: nope\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("anchor"));
+    }
+
+    #[test]
+    fn validate_accepts_interval_and_anchor() {
+        for trig in [
+            "weekly\n  day_of_week: fri",
+            "monthly\n  day_of_month: 12\n  lead_days: 7",
+            "nth_weekday\n  day_of_week: mon\n  week: 1",
+        ] {
+            let raw = format!(
+                "- key: k\n  title: t\n  trigger: {trig}\n  interval: 2\n  anchor: 2026-07-10\n"
+            );
+            load_rules(&raw).unwrap()[0].validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn validate_rejects_interval_on_after_completion() {
+        // interval is not owned by after_completion (which has every_days).
+        let raw =
+            "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  interval: 2\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("interval"));
     }
 
     #[test]

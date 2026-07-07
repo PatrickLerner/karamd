@@ -77,11 +77,30 @@ pub fn monthly_occurrence(year: i32, month: u32, day: u32) -> NaiveDate {
 /// month and next month, so a window that straddles a month boundary resolves
 /// to next month's occurrence.
 pub fn monthly_due(today: NaiveDate, day_of_month: u32, lead_days: i64) -> Option<String> {
+    monthly_due_every(today, day_of_month, lead_days, 1, None)
+}
+
+/// monthly, honouring an `interval` (every Nth month) aligned to `anchor` (see
+/// [`on_cadence`]). Only an on-cadence occurrence's month is eligible; an
+/// off-cadence month is skipped even if today is inside its lead window.
+pub fn monthly_due_every(
+    today: NaiveDate,
+    day_of_month: u32,
+    lead_days: i64,
+    interval: u32,
+    anchor: Option<NaiveDate>,
+) -> Option<String> {
     let (mut year, mut month) = (today.year(), today.month());
     for _ in 0..2 {
         let occ = monthly_occurrence(year, month, day_of_month);
         let delta = (occ - today).num_days();
-        if (0..=lead_days).contains(&delta) {
+        if (0..=lead_days).contains(&delta)
+            && on_cadence(
+                month_index_ym(year, month),
+                anchor.map(month_index),
+                interval,
+            )
+        {
             return Some(format!("{year:04}-{month:02}"));
         }
         (year, month) = if month == 12 {
@@ -91,6 +110,38 @@ pub fn monthly_due(today: NaiveDate, day_of_month: u32, lead_days: i64) -> Optio
         };
     }
     None
+}
+
+/// Is `index` on the cadence set by `interval` (every Nth period) and `anchor`?
+/// `interval <= 1` is always on cadence (the no-op default). With a larger
+/// interval, a period is on cadence when its distance from the anchor period is
+/// a multiple of `interval`; a missing anchor aligns to a fixed epoch
+/// (CE-day-derived period 0), so behaviour stays deterministic without one.
+fn on_cadence(index: i64, anchor_index: Option<i64>, interval: u32) -> bool {
+    if interval <= 1 {
+        return true;
+    }
+    (index - anchor_index.unwrap_or(0)).rem_euclid(interval as i64) == 0
+}
+
+/// Monotonic month counter (`year*12 + month-1`) for interval maths.
+fn month_index_ym(year: i32, month: u32) -> i64 {
+    year as i64 * 12 + (month as i64 - 1)
+}
+
+/// Month counter of a date (see [`month_index_ym`]).
+fn month_index(d: NaiveDate) -> i64 {
+    month_index_ym(d.year(), d.month())
+}
+
+/// Monotonic ISO-week counter for interval maths: the count of whole weeks from
+/// the CE epoch to the Monday of `d`'s ISO week. Consecutive ISO weeks differ by
+/// exactly 1, across year boundaries.
+fn iso_week_index(d: NaiveDate) -> i64 {
+    let iso = d.iso_week();
+    let monday = NaiveDate::from_isoywd_opt(iso.year(), iso.week(), Weekday::Mon)
+        .expect("an ISO week always has a Monday");
+    monday.num_days_from_ce() as i64 / 7
 }
 
 /// Parse a canonical lowercase three-letter weekday (`mon`..`sun`). Deliberately
@@ -117,12 +168,25 @@ pub fn parse_weekday(s: &str) -> Option<Weekday> {
 /// catch up, then resets next week. A fully missed week is never backfilled: the
 /// discriminator is always the *current* ISO week, never a past one.
 pub fn weekly_due(today: NaiveDate, target: Weekday) -> Option<String> {
-    if today.weekday().number_from_monday() >= target.number_from_monday() {
-        let iso = today.iso_week();
-        Some(format!("{:04}-W{:02}", iso.year(), iso.week()))
-    } else {
-        None
+    weekly_due_every(today, target, 1, None)
+}
+
+/// weekly, honouring an `interval` (every Nth ISO week) aligned to `anchor` (see
+/// [`on_cadence`]). An off-cadence week never fires.
+pub fn weekly_due_every(
+    today: NaiveDate,
+    target: Weekday,
+    interval: u32,
+    anchor: Option<NaiveDate>,
+) -> Option<String> {
+    if today.weekday().number_from_monday() < target.number_from_monday() {
+        return None;
     }
+    if !on_cadence(iso_week_index(today), anchor.map(iso_week_index), interval) {
+        return None;
+    }
+    let iso = today.iso_week();
+    Some(format!("{:04}-W{:02}", iso.year(), iso.week()))
 }
 
 /// Which occurrence of a weekday within a month a `nth_weekday` rule targets.
@@ -164,8 +228,26 @@ pub fn nth_weekday_occurrence(
 /// late run catches up), else `None`. Like `weekly`, a fully missed month is not
 /// backfilled: the discriminator is always the current month.
 pub fn nth_weekday_due(today: NaiveDate, weekday: Weekday, ord: WeekOrdinal) -> Option<String> {
+    nth_weekday_due_every(today, weekday, ord, 1, None)
+}
+
+/// nth_weekday, honouring an `interval` (every Nth month) aligned to `anchor`
+/// (see [`on_cadence`]). An off-cadence month never fires.
+pub fn nth_weekday_due_every(
+    today: NaiveDate,
+    weekday: Weekday,
+    ord: WeekOrdinal,
+    interval: u32,
+    anchor: Option<NaiveDate>,
+) -> Option<String> {
     let occ = nth_weekday_occurrence(today.year(), today.month(), weekday, ord);
-    (today >= occ).then(|| format!("{:04}-{:02}", today.year(), today.month()))
+    if today < occ {
+        return None;
+    }
+    if !on_cadence(month_index(today), anchor.map(month_index), interval) {
+        return None;
+    }
+    Some(format!("{:04}-{:02}", today.year(), today.month()))
 }
 
 #[cfg(test)]
@@ -490,6 +572,88 @@ mod tests {
         assert_eq!(
             nth_weekday_due(d(2026, 7, 31), Weekday::Fri, WeekOrdinal::Last),
             Some("2026-07".to_string())
+        );
+    }
+
+    #[test]
+    fn interval_one_matches_the_plain_helpers() {
+        // The interval-aware variants with interval 1 / no anchor reproduce the
+        // plain functions exactly.
+        assert_eq!(
+            weekly_due_every(d(2026, 7, 10), Weekday::Fri, 1, None),
+            weekly_due(d(2026, 7, 10), Weekday::Fri)
+        );
+        assert_eq!(
+            monthly_due_every(d(2026, 7, 6), 12, 7, 1, None),
+            monthly_due(d(2026, 7, 6), 12, 7)
+        );
+        assert_eq!(
+            nth_weekday_due_every(d(2026, 7, 6), Weekday::Mon, WeekOrdinal::Nth(1), 1, None),
+            nth_weekday_due(d(2026, 7, 6), Weekday::Mon, WeekOrdinal::Nth(1))
+        );
+    }
+
+    #[test]
+    fn weekly_biweekly_with_anchor_fires_on_alternating_weeks() {
+        let anchor = Some(d(2026, 7, 10)); // Fri of W28
+        assert_eq!(
+            weekly_due_every(d(2026, 7, 10), Weekday::Fri, 2, anchor),
+            Some("2026-W28".to_string())
+        );
+        // W29 is one week off the anchor -> skipped.
+        assert_eq!(
+            weekly_due_every(d(2026, 7, 17), Weekday::Fri, 2, anchor),
+            None
+        );
+        // W30 is two weeks off -> fires again.
+        assert_eq!(
+            weekly_due_every(d(2026, 7, 24), Weekday::Fri, 2, anchor),
+            Some("2026-W30".to_string())
+        );
+    }
+
+    #[test]
+    fn weekly_biweekly_without_anchor_is_deterministic_alternation() {
+        // With no anchor the cadence aligns to a fixed epoch; consecutive weeks
+        // must alternate (exactly one of two adjacent weeks fires).
+        let a = weekly_due_every(d(2026, 7, 10), Weekday::Fri, 2, None);
+        let b = weekly_due_every(d(2026, 7, 17), Weekday::Fri, 2, None);
+        assert!(
+            a.is_some() ^ b.is_some(),
+            "adjacent biweekly weeks must alternate"
+        );
+    }
+
+    #[test]
+    fn monthly_interval_with_anchor_skips_off_months() {
+        let anchor = Some(d(2026, 7, 12));
+        assert_eq!(
+            monthly_due_every(d(2026, 7, 6), 12, 7, 2, anchor),
+            Some("2026-07".to_string())
+        );
+        assert_eq!(monthly_due_every(d(2026, 8, 6), 12, 7, 2, anchor), None);
+        assert_eq!(
+            monthly_due_every(d(2026, 9, 6), 12, 7, 2, anchor),
+            Some("2026-09".to_string())
+        );
+    }
+
+    #[test]
+    fn nth_weekday_interval_with_anchor_skips_off_months() {
+        let anchor = Some(d(2026, 7, 6)); // first Monday of July
+        assert_eq!(
+            nth_weekday_due_every(d(2026, 7, 6), Weekday::Mon, WeekOrdinal::Nth(1), 2, anchor),
+            Some("2026-07".to_string())
+        );
+        // First Monday of August is off cadence.
+        assert_eq!(
+            nth_weekday_due_every(d(2026, 8, 3), Weekday::Mon, WeekOrdinal::Nth(1), 2, anchor),
+            None
+        );
+        // First Monday of September is back on cadence.
+        assert_eq!(
+            nth_weekday_due_every(d(2026, 9, 7), Weekday::Mon, WeekOrdinal::Nth(1), 2, anchor),
+            Some("2026-09".to_string())
         );
     }
 }

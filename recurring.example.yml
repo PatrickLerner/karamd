@@ -56,6 +56,19 @@
   priority: medium
   tags: [ops]
 
+# Interval: run only every Nth period. `weekly`, `monthly`, and `nth_weekday`
+# accept `interval` (>= 1, default 1 = every period) and an optional `anchor`
+# (a YYYY-MM-DD date on the desired cadence). Here: a retro every 2nd ISO week
+# aligned to the Friday 2026-07-10. Omit `anchor` to align to a fixed epoch.
+- key: sprint-retro
+  title: "Sprint retro"
+  trigger: weekly
+  day_of_week: fri
+  interval: 2
+  anchor: 2026-07-10
+  priority: medium
+  tags: [team]
+
 # Optional `body`: markdown for the generated task, replacing the default
 # `## Objective / ## Tasks / ## Acceptance Criteria` TODO stub. Omit it to keep
 # the stub. karamd still writes the frontmatter, the `# <title>` heading, and a

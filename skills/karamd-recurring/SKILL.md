@@ -48,6 +48,13 @@ Trigger-specific fields:
   month, e.g. "first Monday", "last Friday". On-or-after that date so a late run
   catches up within the month; an open task for the key blocks a second.
 
+`weekly`, `monthly`, and `nth_weekday` also accept an optional **`interval`**
+(integer >= 1, default 1 = every period) and **`anchor`** (`YYYY-MM-DD`, a date
+on the desired cadence). `interval: 2` means every other period (biweekly, every
+other month). `interval: 1` or omitted is a no-op. Omitting `anchor` aligns the
+cadence to a fixed epoch (still deterministic). The dedup marker is unchanged;
+`interval` only gates which periods are eligible.
+
 Optional on any rule:
 
 | Field | Meaning |
@@ -148,6 +155,16 @@ fully skipped week is never backfilled.
   week: 1            # first Monday; `last` for the last such weekday
   priority: medium
   tags: [ops]
+
+# Every other ISO week (biweekly), aligned to a Friday on the cadence.
+- key: sprint-retro
+  title: "Sprint retro"
+  trigger: weekly
+  day_of_week: fri
+  interval: 2
+  anchor: 2026-07-10
+  priority: medium
+  tags: [team]
 
 # Optional body replacing the TODO stub.
 - key: quarterly-backup

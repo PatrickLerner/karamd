@@ -71,6 +71,12 @@ Five trigger kinds:
 These are genuinely different triggers. karamd reads task *state* each run
 rather than blindly emitting on a schedule, so none piles up duplicates.
 
+`weekly`, `monthly`, and `nth_weekday` accept an optional `interval` (every Nth
+period, e.g. `interval: 2` for biweekly or every other month) plus an optional
+`anchor` (a `YYYY-MM-DD` date on the desired cadence). Omitting `interval` (or
+`interval: 1`) means every period; omitting `anchor` aligns the cadence to a
+fixed epoch, so it stays deterministic even without one.
+
 A rule may carry an optional `body:` (markdown) that replaces the default
 `TODO` stub in the generated task. karamd always writes the frontmatter, the
 `# <title>` heading, and a provenance comment; the body is everything after
