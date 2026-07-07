@@ -260,9 +260,11 @@ karamd web --vault /path/to/vault --web-dir web/dist --run-command claude
   so never expose `karamd web` on a public interface. Launch is always explicit
   (per task, on button press).
 
-The bundle is built with **bun**, a separate step from the Rust build. Use bun's
-`--production` flag (the `build` script does) so React's production JSX runtime
-is bundled:
+The bundle is built with **bun**, a separate step from the Rust build. The
+`build` script (`web/build.ts`) bundles with `NODE_ENV=production` so React's
+production JSX runtime is used, and content-hashes the JS/CSS filenames so
+deploys are picked up without a manual hard refresh (the server caches hashed
+assets immutably, revalidates `index.html`):
 
 ```
 cd web && bun install && bun run build      # produces web/dist

@@ -19,8 +19,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{Path, Query, Request, State},
+    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
@@ -482,12 +483,69 @@ async fn preview_rules(
     Ok(Json(PreviewResponse { created }).into_response())
 }
 
+/// `Cache-Control` for immutable, content-addressed assets: their URL changes
+/// whenever their bytes change, so a browser may keep them for a year.
+const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
+/// `Cache-Control` for everything else — chiefly `index.html` and the SPA
+/// deep-link fallbacks — so it always revalidates and points at the current
+/// hashed asset URLs after a deploy.
+const CACHE_REVALIDATE: &str = "no-cache";
+
+/// The `Cache-Control` value for a served static path. Content-hashed bundle
+/// files (`…-<hash>.js` / `…-<hash>.css`) and the font files never change under
+/// a given URL, so they are immutable; every other path revalidates.
+fn cache_control_for(path: &str) -> &'static str {
+    if path.starts_with("/fonts/") || is_hashed_asset(path) {
+        CACHE_IMMUTABLE
+    } else {
+        CACHE_REVALIDATE
+    }
+}
+
+/// True when `path`'s final segment looks like a content-hashed bundle file,
+/// i.e. `<name>-<hash>.js` or `<name>-<hash>.css` where `<hash>` is at least
+/// six alphanumerics. Matches both bun's entry hash and the stylesheet hash the
+/// web build appends. A plain `main.js` (no hash) is deliberately not matched,
+/// so a build that ever forgets to hash never gets cached forever by mistake.
+fn is_hashed_asset(path: &str) -> bool {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let Some(stem) = file
+        .strip_suffix(".js")
+        .or_else(|| file.strip_suffix(".css"))
+    else {
+        return false;
+    };
+    match stem.rsplit_once('-') {
+        Some((name, hash)) => {
+            !name.is_empty() && hash.len() >= 6 && hash.bytes().all(|b| b.is_ascii_alphanumeric())
+        }
+        None => false,
+    }
+}
+
+/// Middleware that stamps [`cache_control_for`] onto statically served assets.
+/// Applied to the static file service only, so JSON responses and the
+/// WebSocket upgrade are never touched.
+async fn static_cache_control(req: Request, next: Next) -> Response {
+    let cc = cache_control_for(req.uri().path());
+    let mut resp = next.run(req).await;
+    resp.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static(cc));
+    resp
+}
+
 /// Build the axum app: the JSON API plus static serving of the SPA bundle.
 /// Unknown paths fall back to `index.html` so the SPA's client-side routing
 /// works on deep links / refresh.
 fn app(root: PathBuf, web_dir: PathBuf, run_command: String) -> Router {
     let index = web_dir.join("index.html");
     let static_service = ServeDir::new(web_dir).fallback(ServeFile::new(index));
+    // Cache-Control is stamped on the static assets only (see
+    // [`static_cache_control`]): a nested router carries the layer, so the API
+    // routes and the WebSocket upgrade below are never wrapped.
+    let static_router = Router::new()
+        .fallback_service(static_service)
+        .layer(middleware::from_fn(static_cache_control));
     Router::new()
         .route("/api/tasks", get(list_tasks).post(create_task))
         .route("/api/tasks/{id}", get(get_task).patch(patch_task))
@@ -502,7 +560,7 @@ fn app(root: PathBuf, web_dir: PathBuf, run_command: String) -> Router {
         .route("/api/next", get(next_tasks))
         .route("/api/rules", get(get_rules).put(put_rules))
         .route("/api/rules/preview", post(preview_rules))
-        .fallback_service(static_service)
+        .fallback_service(static_router)
         .with_state(AppState {
             root: Arc::new(root),
             run_command: Arc::new(run_command),
@@ -977,8 +1035,77 @@ mod tests {
         // A deep link with no matching file falls back to index.html.
         let res = router.oneshot(get("/some/deep/link")).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+        // The fallback serves index.html, which must revalidate.
+        assert_eq!(res.headers().get(CACHE_CONTROL).unwrap(), CACHE_REVALIDATE);
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("hello spa"));
+    }
+
+    #[test]
+    fn cache_control_classifies_paths() {
+        // Content-hashed bundles and fonts are immutable.
+        assert_eq!(cache_control_for("/main-abcdef12.js"), CACHE_IMMUTABLE);
+        assert_eq!(cache_control_for("/styles-deadbeef.css"), CACHE_IMMUTABLE);
+        assert_eq!(
+            cache_control_for("/fonts/iAWriterQuattroS-Regular.woff2"),
+            CACHE_IMMUTABLE
+        );
+        // HTML, the root, unhashed assets, and the favicon all revalidate.
+        assert_eq!(cache_control_for("/index.html"), CACHE_REVALIDATE);
+        assert_eq!(cache_control_for("/"), CACHE_REVALIDATE);
+        assert_eq!(cache_control_for("/favicon.svg"), CACHE_REVALIDATE);
+        assert_eq!(cache_control_for("/main.js"), CACHE_REVALIDATE);
+        assert_eq!(cache_control_for("/styles.css"), CACHE_REVALIDATE);
+    }
+
+    #[test]
+    fn is_hashed_asset_matches_only_hashed_bundles() {
+        assert!(is_hashed_asset("/main-abcdef12.js"));
+        assert!(is_hashed_asset("/styles-deadbeef.css"));
+        assert!(is_hashed_asset("/chunk-a1b2c3.js")); // 6-char hash is the floor
+        assert!(is_hashed_asset("main-abcdef12.js")); // no leading slash still classifies
+        assert!(!is_hashed_asset("/main.js")); // unhashed
+        assert!(!is_hashed_asset("/main-1234.js")); // hash too short (<6)
+        assert!(!is_hashed_asset("/-abcdef12.js")); // empty name
+        assert!(!is_hashed_asset("/main-abcd_f12.js")); // non-alphanumeric hash
+        assert!(!is_hashed_asset("/favicon.svg")); // not js/css
+        assert!(!is_hashed_asset("/fonts/x.woff2")); // not js/css
+    }
+
+    #[tokio::test]
+    async fn hashed_assets_are_immutable_and_html_revalidates() {
+        let root = tempdir();
+        let dist = root.join("web-dist");
+        fs::create_dir_all(dist.join("fonts")).unwrap();
+        fs::write(dist.join("index.html"), "<!doctype html>hi").unwrap();
+        fs::write(dist.join("main-abcdef12.js"), "1").unwrap();
+        fs::write(dist.join("styles-deadbeef.css"), "body{}").unwrap();
+        fs::write(dist.join("favicon.svg"), "<svg/>").unwrap();
+        fs::write(dist.join("fonts").join("x.woff2"), "font").unwrap();
+
+        async fn cc_of(root: &std::path::Path, dist: &std::path::Path, path: &str) -> String {
+            let router = app(root.to_path_buf(), dist.to_path_buf(), "claude".to_string());
+            let res = router.oneshot(get(path)).await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "{path} should be served");
+            res.headers()
+                .get(CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()
+        }
+
+        assert_eq!(
+            cc_of(&root, &dist, "/main-abcdef12.js").await,
+            CACHE_IMMUTABLE
+        );
+        assert_eq!(
+            cc_of(&root, &dist, "/styles-deadbeef.css").await,
+            CACHE_IMMUTABLE
+        );
+        assert_eq!(cc_of(&root, &dist, "/fonts/x.woff2").await, CACHE_IMMUTABLE);
+        assert_eq!(cc_of(&root, &dist, "/index.html").await, CACHE_REVALIDATE);
+        assert_eq!(cc_of(&root, &dist, "/favicon.svg").await, CACHE_REVALIDATE);
     }
 
     #[tokio::test]

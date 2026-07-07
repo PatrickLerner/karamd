@@ -16,19 +16,22 @@ nix shell nixpkgs#bun --command bun install
 nix shell nixpkgs#bun --command bun run build
 ```
 
-`bun run build` runs `bun build src/main.tsx --outdir dist --minify` (with
+`bun run build` runs `build.ts`: it bundles `src/main.tsx` minified (with
 `NODE_ENV=production`, otherwise bun bundles the development build of React,
-roughly doubling the bundle) and copies
-`index.html`, `src/styles.css` and `public/` (fonts + favicon) into `dist/`.
-The result is fully self-contained:
+roughly doubling the bundle), hashes `src/styles.css`, copies `public/` (fonts +
+favicon), and rewrites `index.html` to point at the hashed asset URLs. Both the
+JS and CSS get a **content hash** in their filename, so a deploy that changes
+either produces a new URL and is picked up on a normal reload (no hard refresh);
+the Rust server caches hashed assets immutably and revalidates `index.html`
+(see `cache_control_for` in `src/web.rs`). The result is fully self-contained:
 
 ```
 dist/
-  index.html        <- entry; loads ./main.js and ./styles.css
-  main.js           <- bundled, minified app
-  styles.css
+  index.html            <- entry; loads ./main-<hash>.js and ./styles-<hash>.css
+  main-<hash>.js        <- bundled, minified app
+  styles-<hash>.css
   favicon.svg
-  fonts/*.woff2     <- iA Writer Quattro Regular/Italic/Bold
+  fonts/*.woff2         <- iA Writer Quattro Regular/Italic/Bold
   fonts/LICENSE.md
 ```
 
@@ -48,7 +51,7 @@ sample tasks covering all statuses, priorities, phases and a dependency chain.
 
 The SPA uses **hash routing** (`#/`, `#/task/ID`, `#/task/ID/edit`, `#/new`),
 so the server never sees client routes: it only has to serve `/` ->
-`dist/index.html` and the static assets (`/main.js`, `/styles.css`,
+`dist/index.html` and the static assets (`/main-<hash>.js`, `/styles-<hash>.css`,
 `/favicon.svg`, `/fonts/*`) with correct content types (`font/woff2` for the
 fonts). No SPA fallback route is needed. All API calls go to `/api/...` on the
 same origin.

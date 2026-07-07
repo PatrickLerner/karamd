@@ -12,5 +12,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["src", "mock.ts"]
+  "include": ["src", "mock.ts", "build.ts"]
 }

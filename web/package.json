@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "bun build src/main.tsx --outdir dist --production && cp index.html src/styles.css dist/ && cp -R public/. dist/",
+    "build": "bun run build.ts",
     "mock": "bun run mock.ts",
     "typecheck": "tsc --noEmit"
   },
