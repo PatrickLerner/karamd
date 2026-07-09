@@ -192,9 +192,18 @@ pub fn render_task(rule: &Rule, id: &str, marker: &str, today: NaiveDate) -> Str
         fm.push_str(&format!("phase: {phase}\n"));
     }
     fm.push_str("dependencies: []\n");
-    fm.push_str(&format!("tags: {}\n", render_tags(&rule.tags)));
+    fm.push_str(&format!("tags: {}\n", render_tags(&rule.merged_tags())));
     fm.push_str(&format!("created_at: {}\n", today.format("%Y-%m-%d")));
     fm.push_str(&format!("recurring: {}\n", yaml_quote(marker)));
+    // Arbitrary extra frontmatter (#040) verbatim after the managed keys.
+    // `serde_norway::to_string` emits `key: value\n` lines with no `---` fence
+    // and a trailing newline, so it splices straight in; an empty map is
+    // skipped (it would serialize to a stray `{}`).
+    let extra = rule.extra_frontmatter();
+    if !extra.is_empty() {
+        let yaml = serde_norway::to_string(&extra).expect("frontmatter mapping serializes");
+        fm.push_str(&yaml);
+    }
     fm.push_str("---\n\n");
 
     match &rule.body {
@@ -234,6 +243,7 @@ mod tests {
             priority: Some("high".into()),
             tags: vec!["personal".into(), "work".into()],
             body: None,
+            frontmatter: None,
         }
     }
 
@@ -497,6 +507,80 @@ mod tests {
         // Exactly one trailing newline (body's own trailing whitespace trimmed).
         assert!(out.ends_with("Call the dentist.\n"));
         assert!(!out.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn render_task_merges_frontmatter_tags_into_tags_line() {
+        use serde_norway::{Mapping, Value};
+        let mut r = rule();
+        r.tags = vec!["personal".into()];
+        let mut fm = Mapping::new();
+        fm.insert(
+            "tags".into(),
+            Value::Sequence(vec![
+                Value::String("ai-runnable".into()),
+                Value::String("personal".into()), // duplicate dropped
+            ]),
+        );
+        r.frontmatter = Some(fm);
+        let today = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let out = render_task(&r, "007", "periodic-checkin", today);
+        assert!(
+            out.contains("tags: [\"personal\", \"ai-runnable\"]"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_task_appends_extra_frontmatter_verbatim() {
+        use crate::taskmd::model::Task;
+        use serde_norway::{Mapping, Value};
+        let mut r = rule();
+        r.tags = vec![];
+        let mut fm = Mapping::new();
+        fm.insert(
+            "tags".into(),
+            Value::Sequence(vec![Value::String("ai-runnable".into())]),
+        );
+        fm.insert(
+            "ai_working_dir".into(),
+            Value::String("/Users/x/repo".into()),
+        );
+        fm.insert(
+            "labels".into(),
+            Value::Sequence(vec![Value::String("a".into()), Value::String("b".into())]),
+        );
+        r.frontmatter = Some(fm);
+        let today = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let out = render_task(&r, "007", "checkin", today);
+        // The generated file must parse as a task and carry the extra fields
+        // verbatim (nested list included), proving the round-trip AC.
+        let t = Task::parse_required(&out).unwrap();
+        assert_eq!(t.tags(), vec!["ai-runnable"]);
+        assert_eq!(
+            t.get("ai_working_dir"),
+            Some(&Value::String("/Users/x/repo".into()))
+        );
+        assert_eq!(
+            t.get("labels"),
+            Some(&Value::Sequence(vec![
+                Value::String("a".into()),
+                Value::String("b".into())
+            ]))
+        );
+        // The managed keys are still present and correct.
+        assert_eq!(t.id(), "007");
+        assert_eq!(t.recurring().as_deref(), Some("checkin"));
+    }
+
+    #[test]
+    fn render_task_without_frontmatter_is_unchanged() {
+        // No `frontmatter:` => no extra block, no stray `{}`; output identical
+        // to the pre-#040 shape.
+        let today = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let out = render_task(&rule(), "007", "periodic-checkin", today);
+        assert!(!out.contains("{}"));
+        assert!(out.contains("recurring: \"periodic-checkin\"\n---\n\n"));
     }
 
     #[test]

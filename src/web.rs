@@ -299,6 +299,7 @@ async fn create_task(
         dependencies: body.dependencies,
         template: None,
         body: body.body,
+        force: false,
     };
     let view = verbs::create(
         &state.root,
@@ -487,9 +488,13 @@ async fn preview_rules(
 /// whenever their bytes change, so a browser may keep them for a year.
 const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
 /// `Cache-Control` for everything else — chiefly `index.html` and the SPA
-/// deep-link fallbacks — so it always revalidates and points at the current
-/// hashed asset URLs after a deploy.
-const CACHE_REVALIDATE: &str = "no-cache";
+/// deep-link fallbacks. `no-store` (not `no-cache`) so the browser never keeps a
+/// copy and never issues a conditional request: `no-cache` would still store and
+/// revalidate via `Last-Modified`, but a Nix store path normalizes every mtime
+/// to a constant `1970-01-01`, so revalidation returns `304` and serves a stale
+/// index.html that points at asset URLs the new build no longer has (#037). The
+/// entrypoint is tiny and refetching per navigation is negligible.
+const CACHE_NO_STORE: &str = "no-store";
 
 /// The `Cache-Control` value for a served static path. Content-hashed bundle
 /// files (`…-<hash>.js` / `…-<hash>.css`) and the font files never change under
@@ -498,7 +503,7 @@ fn cache_control_for(path: &str) -> &'static str {
     if path.starts_with("/fonts/") || is_hashed_asset(path) {
         CACHE_IMMUTABLE
     } else {
-        CACHE_REVALIDATE
+        CACHE_NO_STORE
     }
 }
 
@@ -1035,8 +1040,8 @@ mod tests {
         // A deep link with no matching file falls back to index.html.
         let res = router.oneshot(get("/some/deep/link")).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        // The fallback serves index.html, which must revalidate.
-        assert_eq!(res.headers().get(CACHE_CONTROL).unwrap(), CACHE_REVALIDATE);
+        // The fallback serves index.html, which must never be stored.
+        assert_eq!(res.headers().get(CACHE_CONTROL).unwrap(), CACHE_NO_STORE);
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("hello spa"));
     }
@@ -1050,12 +1055,15 @@ mod tests {
             cache_control_for("/fonts/iAWriterQuattroS-Regular.woff2"),
             CACHE_IMMUTABLE
         );
-        // HTML, the root, unhashed assets, and the favicon all revalidate.
-        assert_eq!(cache_control_for("/index.html"), CACHE_REVALIDATE);
-        assert_eq!(cache_control_for("/"), CACHE_REVALIDATE);
-        assert_eq!(cache_control_for("/favicon.svg"), CACHE_REVALIDATE);
-        assert_eq!(cache_control_for("/main.js"), CACHE_REVALIDATE);
-        assert_eq!(cache_control_for("/styles.css"), CACHE_REVALIDATE);
+        // The no-store class must actually send `no-store`: the Nix constant-mtime
+        // bug (#037) hinged on `no-cache` still storing and revalidating.
+        assert_eq!(CACHE_NO_STORE, "no-store");
+        // HTML, the root, unhashed assets, and the favicon are never stored.
+        assert_eq!(cache_control_for("/index.html"), CACHE_NO_STORE);
+        assert_eq!(cache_control_for("/"), CACHE_NO_STORE);
+        assert_eq!(cache_control_for("/favicon.svg"), CACHE_NO_STORE);
+        assert_eq!(cache_control_for("/main.js"), CACHE_NO_STORE);
+        assert_eq!(cache_control_for("/styles.css"), CACHE_NO_STORE);
     }
 
     #[test]
@@ -1073,7 +1081,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hashed_assets_are_immutable_and_html_revalidates() {
+    async fn hashed_assets_are_immutable_and_html_is_no_store() {
         let root = tempdir();
         let dist = root.join("web-dist");
         fs::create_dir_all(dist.join("fonts")).unwrap();
@@ -1104,8 +1112,8 @@ mod tests {
             CACHE_IMMUTABLE
         );
         assert_eq!(cc_of(&root, &dist, "/fonts/x.woff2").await, CACHE_IMMUTABLE);
-        assert_eq!(cc_of(&root, &dist, "/index.html").await, CACHE_REVALIDATE);
-        assert_eq!(cc_of(&root, &dist, "/favicon.svg").await, CACHE_REVALIDATE);
+        assert_eq!(cc_of(&root, &dist, "/index.html").await, CACHE_NO_STORE);
+        assert_eq!(cc_of(&root, &dist, "/favicon.svg").await, CACHE_NO_STORE);
     }
 
     #[tokio::test]

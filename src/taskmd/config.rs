@@ -103,6 +103,74 @@ impl WebConfig {
     }
 }
 
+/// How an agent command receives the rendered prompt (`run.agents.<n>.prompt_via`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptVia {
+    /// Substitute the prompt into a `{prompt}` token in the command argv.
+    #[default]
+    Arg,
+    /// Pipe the prompt to the command's stdin.
+    Stdin,
+    /// Write the prompt to a temp file and substitute its path into a
+    /// `{prompt_file}` token in the argv.
+    File,
+}
+
+/// One configured agent command (`run.agents.<name>`). The command is an
+/// allowlist: task text never supplies it, only which named agent to use.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct AgentSpec {
+    /// argv, e.g. `["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"]`.
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub prompt_via: PromptVia,
+}
+
+/// Default prompt template when `run.prompt_template` is unset. Instructs the
+/// agent to self-complete so the exit-0-plus-terminal-status success rule holds.
+pub const DEFAULT_PROMPT_TEMPLATE: &str = "You are completing a task autonomously and non-interactively. When the work is \
+done, run `karamd complete {id}` from the vault so it is marked complete; do not \
+ask questions.\n\nTask {id}: {title}\n\n{body}\n";
+
+/// Autonomous task-execution settings (`run:`, #039). karamd-specific; taskmd
+/// ignores it. Disabled by default: the whole feature is off unless
+/// `run.enabled` is explicitly true (the top-level safety lock).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct RunConfig {
+    /// Master switch. Absent/false: `karamd run` does nothing and spawns nothing.
+    pub enabled: bool,
+    /// Default agent name; a task may override via `ai_agent` frontmatter.
+    pub agent: String,
+    /// Named agent commands. A task's agent must resolve to one of these.
+    pub agents: BTreeMap<String, AgentSpec>,
+    /// Default working dir for spawned agents; a task may override via
+    /// `ai_working_dir`. Absent: the vault root.
+    pub working_dir: Option<String>,
+    /// Hard per-run timeout (seconds).
+    pub timeout_secs: u64,
+    /// After this many failed attempts a task is parked (`ai-failed` tag) and
+    /// no longer selected.
+    pub max_attempts: u32,
+    /// Prompt template; `{id}`, `{title}`, `{body}`, `{path}` are interpolated.
+    pub prompt_template: String,
+}
+
+impl Default for RunConfig {
+    fn default() -> Self {
+        RunConfig {
+            enabled: false,
+            agent: "claude".into(),
+            agents: BTreeMap::new(),
+            working_dir: None,
+            timeout_secs: 900,
+            max_attempts: 3,
+            prompt_template: DEFAULT_PROMPT_TEMPLATE.into(),
+        }
+    }
+}
+
 /// One entry of the `scopes:` map, backing task `touches` values.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Scope {
@@ -125,6 +193,8 @@ pub struct Config {
     pub scopes: BTreeMap<String, Scope>,
     /// Web dashboard settings (karamd-specific; ignored by taskmd).
     pub web: WebConfig,
+    /// Autonomous task-execution settings (karamd-specific; ignored by taskmd).
+    pub run: RunConfig,
 }
 
 impl Default for Config {
@@ -136,6 +206,7 @@ impl Default for Config {
             workflow: Workflow::default(),
             scopes: BTreeMap::new(),
             web: WebConfig::default(),
+            run: RunConfig::default(),
         }
     }
 }
@@ -334,6 +405,56 @@ scopes:
         let c: Config = serde_norway::from_str("web:\n  today: []\n").unwrap();
         assert_eq!(c.web.today, Some(Vec::new()));
         assert!(c.web.today_phases().is_empty());
+    }
+
+    #[test]
+    fn run_config_defaults_are_off() {
+        let c = Config::default();
+        assert!(!c.run.enabled);
+        assert_eq!(c.run.agent, "claude");
+        assert!(c.run.agents.is_empty());
+        assert_eq!(c.run.working_dir, None);
+        assert_eq!(c.run.timeout_secs, 900);
+        assert_eq!(c.run.max_attempts, 3);
+        assert!(c.run.prompt_template.contains("{id}"));
+        // Absent `run:` section behaves as the default (off).
+        let c: Config = serde_norway::from_str("dir: t\n").unwrap();
+        assert!(!c.run.enabled);
+    }
+
+    #[test]
+    fn run_config_parses_agents_and_prompt_via() {
+        let raw = "run:\n  enabled: true\n  agent: opencode\n  working_dir: /repo\n  timeout_secs: 60\n  max_attempts: 2\n  prompt_template: \"do {id}\"\n  agents:\n    claude:\n      command: [claude, -p, \"{prompt}\"]\n    opencode:\n      command: [opencode, run]\n      prompt_via: stdin\n    filed:\n      command: [tool, \"{prompt_file}\"]\n      prompt_via: file\n";
+        let c: Config = serde_norway::from_str(raw).unwrap();
+        assert!(c.run.enabled);
+        assert_eq!(c.run.agent, "opencode");
+        assert_eq!(c.run.working_dir.as_deref(), Some("/repo"));
+        assert_eq!(c.run.timeout_secs, 60);
+        assert_eq!(c.run.max_attempts, 2);
+        assert_eq!(c.run.prompt_template, "do {id}");
+        assert_eq!(c.run.agents.len(), 3);
+        assert_eq!(c.run.agents["claude"].prompt_via, PromptVia::Arg);
+        assert_eq!(
+            c.run.agents["claude"].command,
+            vec!["claude", "-p", "{prompt}"]
+        );
+        assert_eq!(c.run.agents["opencode"].prompt_via, PromptVia::Stdin);
+        assert_eq!(c.run.agents["filed"].prompt_via, PromptVia::File);
+    }
+
+    #[test]
+    fn run_config_rejects_agent_without_command() {
+        assert!(
+            serde_norway::from_str::<Config>("run:\n  agents:\n    x:\n      prompt_via: arg\n")
+                .is_err()
+        );
+        // Unknown prompt_via is a loud error, not a silent default.
+        assert!(
+            serde_norway::from_str::<Config>(
+                "run:\n  agents:\n    x:\n      command: [c]\n      prompt_via: telepathy\n"
+            )
+            .is_err()
+        );
     }
 
     #[test]

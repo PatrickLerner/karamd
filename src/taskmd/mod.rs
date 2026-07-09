@@ -15,7 +15,9 @@ pub mod model;
 pub mod store;
 pub mod template;
 
-pub use config::{Config, IdConfig, IdStrategy, Phase, Scope, Workflow};
+pub use config::{
+    AgentSpec, Config, IdConfig, IdStrategy, Phase, PromptVia, RunConfig, Scope, Workflow,
+};
 pub use graph::{Graph, GraphIssue};
 pub use model::{Effort, ParseOutcome, Priority, Status, Task, TaskType, VerifyCheck};
 pub use store::{Entropy, Scan, SystemEntropy, Vault};

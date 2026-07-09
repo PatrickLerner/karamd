@@ -4,6 +4,42 @@ All notable changes to karamd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Task execution mode: `karamd run` runs a configured AI agent (claude, opencode,
+  or any CLI) against tasks explicitly tagged `ai-runnable`, to autonomously
+  implement recurring chores (e.g. fetch from an MCP server and update a note).
+  Off unless a `run:` section in `.taskmd.yaml` sets `enabled: true`; the command
+  comes only from `run.agents` (a task may pick which named agent, never an
+  arbitrary command). Attempts are tracked in `ai_attempts` and incremented
+  *before* the spawn, so a crash still counts; at `max_attempts` the task is
+  parked with an `ai-failed` tag and no longer selected. A run counts as success
+  only on exit 0 **and** the task reaching a terminal status. `run --dry-run`
+  lists what would run without spawning. Tasks execute sequentially (#039).
+- Recurring rules accept an optional `frontmatter:` map, merged verbatim onto the
+  generated task; `tags` merges with the rule's own tags and karamd-managed keys
+  are rejected. This lets a rule emit an `ai-runnable` task, so `generate` and
+  `run` compose end to end (#040).
+- `next --runnable` ranks only the tasks `karamd run` would execute (tagged
+  `ai-runnable`, attempts left, not parked), using the same selection predicate
+  so there is no drift. The existing `tag:` / `open:` query terms also compose in
+  `list` (e.g. `list "tag:ai-runnable AND open:true"`) (#041).
+- `create` now refuses a second **open** task with the exact same title (trimmed,
+  case-sensitive), naming the colliding task; `--force` bypasses it. Terminal
+  (completed/cancelled) tasks never block a fresh one. `--json` emits the error
+  as `{"error": ..., "existing_id": ...}` so scripted callers can branch. Stops
+  agents that retry a `create` call from leaving duplicate open tasks (#038).
+
+### Fixed
+
+- `index.html` and the SPA deep-link fallbacks are now served `Cache-Control:
+  no-store` instead of `no-cache`. Under a Nix store path every file's mtime is a
+  constant `1970-01-01`, so `no-cache` revalidation returned `304` and served a
+  stale entrypoint after an upgrade, breaking the SPA with a module MIME error
+  until a hard refresh. Content-hashed assets stay `immutable` (#037).
+
 ## [0.6.1] - 2026-07-07
 
 ### Fixed

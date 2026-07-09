@@ -72,6 +72,11 @@ pub struct Options {
     pub phase: Option<String>,
     /// Sort by phase order before score.
     pub strict_phases: bool,
+    /// Restrict candidates to this id allowlist (used by `--runnable` to keep
+    /// only the `run`-selectable tasks). `None` = no restriction. The set is
+    /// computed by the caller from `run::plan`, so `next` stays decoupled from
+    /// run config and there is no drift from `run::is_runnable`.
+    pub only_ids: Option<Vec<String>>,
 }
 
 /// The full result: ranked recommendations plus the blocker view.
@@ -303,6 +308,11 @@ pub fn recommend(tasks: &[Task], phase_order: &[String], opts: &Options) -> Next
         })
         .filter(|t| !opts.quick_wins || t.effort() == Some(Effort::Small))
         .filter(|t| !opts.critical || on_path.contains(&t.id()))
+        .filter(|t| {
+            opts.only_ids
+                .as_ref()
+                .is_none_or(|ids| ids.iter().any(|id| *id == t.id()))
+        })
         .map(|t| {
             let (score, reasons) = score_task(t, &on_path, &info, phase_order);
             (t, score, reasons)
@@ -698,6 +708,42 @@ mod tests {
         let mut ids: Vec<&str> = r.recommendations.iter().map(|x| x.id.as_str()).collect();
         ids.sort();
         assert_eq!(ids, vec!["001", "002"]);
+    }
+
+    #[test]
+    fn only_ids_restricts_candidates() {
+        let tasks = vec![
+            task("id: \"001\"\ntitle: A"),
+            task("id: \"002\"\ntitle: B"),
+            task("id: \"003\"\ntitle: C"),
+        ];
+        // Allowlist keeps only listed ids; ranking/readiness still apply.
+        let restricted = recommend(
+            &tasks,
+            &[],
+            &Options {
+                only_ids: Some(vec!["002".into(), "003".into()]),
+                ..Options::default()
+            },
+        );
+        let mut ids: Vec<&str> = restricted
+            .recommendations
+            .iter()
+            .map(|x| x.id.as_str())
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["002", "003"]);
+        // An empty allowlist recommends nothing; `None` recommends all.
+        let none = recommend(
+            &tasks,
+            &[],
+            &Options {
+                only_ids: Some(vec![]),
+                ..Options::default()
+            },
+        );
+        assert!(none.recommendations.is_empty());
+        assert_eq!(recommend_all(&tasks).recommendations.len(), 3);
     }
 
     #[test]

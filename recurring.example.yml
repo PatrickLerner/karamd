@@ -69,6 +69,22 @@
   priority: medium
   tags: [team]
 
+# Optional `frontmatter`: an arbitrary YAML map merged verbatim onto the
+# generated task. `tags` merges with the rule's own `tags`; any other key is
+# written as-is. karamd-managed keys (id, title, status, priority, phase,
+# dependencies, created_at, recurring) are rejected. The main use is producing a
+# task the `karamd run` executor (#039) will pick up: tag it `ai-runnable` and,
+# optionally, point it at a working dir.
+- key: fetch-kpis
+  title: "Fetch KPIs and refresh the dashboard note"
+  trigger: weekly
+  day_of_week: mon
+  tags: [reporting]
+  frontmatter:
+    tags: [ai-runnable]          # merges -> reporting, ai-runnable
+    ai_working_dir: /path/to/notes-repo
+    # ai_agent: opencode         # override the configured default agent
+
 # Optional `body`: markdown for the generated task, replacing the default
 # `## Objective / ## Tasks / ## Acceptance Criteria` TODO stub. Omit it to keep
 # the stub. karamd still writes the frontmatter, the `# <title>` heading, and a

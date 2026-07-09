@@ -10,7 +10,7 @@ use chrono::NaiveDate;
 use crate::output::TaskView;
 use crate::query::{self, EvalCtx};
 use crate::taskmd::{
-    Effort, Entropy, Graph, Priority, Status, TaskType, Vault, Workflow, template,
+    Effort, Entropy, Graph, Priority, Status, Task, TaskType, Vault, Workflow, template,
 };
 
 /// Everything `create` accepts. Enum-valued fields are parsed here so a typo
@@ -27,13 +27,60 @@ pub struct CreateSpec {
     pub dependencies: Vec<String>,
     pub template: Option<String>,
     pub body: Option<String>,
+    /// Create even when an open task already has this exact title (#038).
+    pub force: bool,
 }
+
+/// Returned by [`create`] when an *open* task already carries the requested
+/// title and `--force` was not given (#038). Agents that retry a `create` tool
+/// call otherwise leave two same-titled open tasks behind. Carries the colliding
+/// task's id (and filename when known) so the CLI can name it and emit it as
+/// structured `--json` error output.
+#[derive(Debug)]
+pub struct DuplicateOpenTitle {
+    pub existing_id: String,
+    pub existing_file: Option<String>,
+}
+
+impl std::fmt::Display for DuplicateOpenTitle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let who = self.existing_file.as_deref().unwrap_or(&self.existing_id);
+        write!(
+            f,
+            "an open task with this title already exists: {who}\n       (use --force to create a duplicate anyway)"
+        )
+    }
+}
+
+impl std::error::Error for DuplicateOpenTitle {}
 
 /// Validate the `due` field's `YYYY-MM-DD` shape before any file is written.
 fn check_due(due: &str) -> Result<()> {
     NaiveDate::parse_from_str(due, "%Y-%m-%d")
         .map(|_| ())
         .with_context(|| format!("invalid due `{due}` (need YYYY-MM-DD)"))
+}
+
+/// Fail with [`DuplicateOpenTitle`] if an *open* task already has `wanted` as
+/// its exact (trimmed) title (#038). Terminal (completed/cancelled) tasks never
+/// collide: redoing something is legitimate.
+fn reject_open_duplicate(tasks: &[Task], wanted: &str) -> Result<()> {
+    let Some(dup) = tasks
+        .iter()
+        .find(|t| !t.effective_status().is_terminal() && t.title().trim() == wanted)
+    else {
+        return Ok(());
+    };
+    let existing_file = dup
+        .rel_path
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .map(|s| s.to_string_lossy().into_owned());
+    Err(DuplicateOpenTitle {
+        existing_id: dup.id(),
+        existing_file,
+    }
+    .into())
 }
 
 /// Create a new task file in the vault. Template defaults apply first,
@@ -74,9 +121,16 @@ pub fn create(
 
     let vault = Vault::open(root)?;
 
-    // Dependencies must exist; a dangling ref would fail taskmd validation.
-    if !spec.dependencies.is_empty() {
+    // A single scan feeds both the duplicate-title guard and the dependency
+    // check below (skip it when neither needs it).
+    if !spec.force || !spec.dependencies.is_empty() {
         let scan = vault.scan()?;
+
+        if !spec.force {
+            reject_open_duplicate(&scan.tasks, spec.title.trim())?;
+        }
+
+        // Dependencies must exist; a dangling ref would fail taskmd validation.
         for dep in &spec.dependencies {
             if scan.find(dep).is_none() {
                 bail!("dependency `{dep}` does not exist");
@@ -364,6 +418,63 @@ mod tests {
     }
 
     #[test]
+    fn create_rejects_duplicate_open_title() {
+        let root = tempdir();
+        let first = create(
+            &root,
+            &spec("Ring back"),
+            day(2026, 7, 2),
+            &mut FixedEntropy,
+        )
+        .unwrap();
+        assert_eq!(first.id, "001");
+        // A second create with the same (trimmed) title is refused, naming the
+        // colliding task, and writes nothing.
+        let err = create(
+            &root,
+            &spec("  Ring back  "),
+            day(2026, 7, 3),
+            &mut FixedEntropy,
+        )
+        .unwrap_err();
+        let dup = err.downcast_ref::<DuplicateOpenTitle>().unwrap();
+        assert_eq!(dup.existing_id, "001");
+        assert_eq!(dup.existing_file.as_deref(), Some("001-ring-back"));
+        assert!(dup.to_string().contains("001-ring-back"));
+        assert!(dup.to_string().contains("--force"));
+        assert_eq!(fs::read_dir(root.join("tasks")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn create_duplicate_allowed_when_terminal_or_forced() {
+        let root = tempdir();
+        write_task(
+            &root,
+            "001-redo.md",
+            "---\nid: \"001\"\ntitle: Redo\nstatus: completed\n---\n",
+        );
+        write_task(
+            &root,
+            "002-redo.md",
+            "---\nid: \"002\"\ntitle: Redo\nstatus: cancelled\n---\n",
+        );
+        // Only terminal tasks share the title -> a fresh one is allowed.
+        let v = create(&root, &spec("Redo"), day(2026, 7, 3), &mut FixedEntropy).unwrap();
+        assert_eq!(v.id, "003");
+        // Now an OPEN one exists; --force still lets a duplicate through, and
+        // still validates dependencies (forced create with a dep exercises the
+        // scan-with-force-skips-dedup path).
+        let forced = CreateSpec {
+            force: true,
+            dependencies: vec!["001".into()],
+            ..spec("Redo")
+        };
+        let v = create(&root, &forced, day(2026, 7, 4), &mut FixedEntropy).unwrap();
+        assert_eq!(v.id, "004");
+        assert_eq!(v.dependencies, vec!["001"]);
+    }
+
+    #[test]
     fn create_with_ulid_strategy_uses_entropy_clock() {
         let root = tempdir();
         fs::write(root.join(".taskmd.yaml"), "id:\n  strategy: ulid\n").unwrap();
@@ -407,6 +518,7 @@ mod tests {
             dependencies: vec!["001".into()],
             template: None,
             body: Some("## My body\n\n- [ ] step".into()),
+            force: false,
         };
         let v = create(&root, &s, day(2026, 7, 2), &mut FixedEntropy).unwrap();
         assert_eq!(v.id, "002");

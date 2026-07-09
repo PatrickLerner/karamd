@@ -43,7 +43,7 @@ jobs:
         # src/main.rs is the binary shim; src/web_terminal.rs is the PTY +
         # WebSocket glue (spawns processes, bridges blocking IO to an async
         # socket) whose pure logic lives in the covered src/terminal.rs.
-        run: cargo llvm-cov --all-features --ignore-filename-regex 'src/(main|web_terminal)\.rs' --fail-under-lines 100
+        run: cargo llvm-cov --all-features --ignore-filename-regex 'src/(main|web_terminal|run_spawn)\.rs' --fail-under-lines 100
 
   web:
     name: frontend (bun build + typecheck)

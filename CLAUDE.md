@@ -86,14 +86,33 @@ Split into a library crate (all logic, unit-testable) plus a thin binary:
   `web/`. Embedded terminal (#010): `src/terminal.rs` (pure prompt-seeding +
   argv parsing, tested) and `src/web_terminal.rs` (the PTY + WebSocket glue,
   excluded from coverage).
+- Task execution (#039): `src/run.rs` — `karamd run` runs a configured AI agent
+  (claude/opencode/any CLI) against tasks tagged `ai-runnable`. Pure, tested
+  core: selection (`is_runnable`), prompt render, agent/working-dir resolution,
+  the `ai_*` frontmatter state transitions, and the orchestration loop behind an
+  `AgentRunner` trait. `src/run_spawn.rs` is the real subprocess + timeout impl
+  (excluded from coverage, like `web_terminal.rs`). Config lives in a
+  karamd-specific `run:` section of `.taskmd.yaml` (off unless `run.enabled`),
+  *not* the bare-list recurring file. Attempts are incremented **before** the
+  spawn (a crash costs one attempt, no infinite retry); at `max_attempts` a task
+  is parked with the `ai-failed` tag and no longer selected. Selectors:
+  `run --dry-run` lists the raw runnable set; `next --runnable` (#041) ranks that
+  same set (via `run::plan`, no drift) like any other `next`; and the `tag:` /
+  `open:` query terms compose in `list` (e.g. `list "tag:ai-runnable AND open:true"`).
+- Rule frontmatter passthrough (#040): a recurring rule may carry a
+  `frontmatter:` map merged verbatim onto generated tasks (`tags` merges;
+  `RESERVED_FRONTMATTER_KEYS` rejected by `validate`). This is how a rule emits
+  an `ai-runnable` task, closing the generate→run loop.
 - `recurring.example.yml` — rule format reference.
 
 Core logic keeps I/O thin and functions pure so the suite hits **100% line
-coverage** (`cargo llvm-cov --ignore-filename-regex 'src/(main|web_terminal)\.rs'`).
-Two files are excluded as untestable process/network glue: `src/main.rs` (the
-binary shim) and `src/web_terminal.rs` (the PTY + WebSocket bridge for the
-embedded terminal, whose pure logic lives in the covered `src/terminal.rs`). TDD:
-write the test, watch it fail, implement.
+coverage**
+(`cargo llvm-cov --ignore-filename-regex 'src/(main|web_terminal|run_spawn)\.rs'`).
+Three files are excluded as untestable process/network glue: `src/main.rs` (the
+binary shim), `src/web_terminal.rs` (the PTY + WebSocket bridge for the embedded
+terminal, whose pure logic lives in the covered `src/terminal.rs`), and
+`src/run_spawn.rs` (the agent subprocess + timeout bridge, whose pure logic lives
+in the covered `src/run.rs`). TDD: write the test, watch it fail, implement.
 
 ## taskmd frontmatter to emit (match taskmd's own output)
 

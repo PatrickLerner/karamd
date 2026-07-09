@@ -9,6 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use serde_norway::{Mapping, Value};
 
 /// Which due-check governs a rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -128,6 +129,43 @@ pub struct Rule {
     /// the stub is used so existing rules keep their output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Arbitrary extra frontmatter merged verbatim onto the generated task
+    /// (#040), e.g. `tags: [ai-runnable]` or a custom `ai_working_dir:` field.
+    /// karamd-managed keys ([`RESERVED_FRONTMATTER_KEYS`]) are rejected by
+    /// [`Rule::validate`]; `tags` is the deliberate exception and *merges* with
+    /// the rule's own `tags`. Values round-trip untouched, matching the
+    /// "unknown frontmatter preserved verbatim" contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontmatter: Option<Mapping>,
+}
+
+/// Frontmatter keys the generator already writes from dedicated rule fields (or
+/// owns outright). A rule's `frontmatter` map may not set them: doing so would
+/// either break idempotency/the spec (`id`, `created_at`, `status`,
+/// `recurring`) or emit a duplicate YAML key fighting the dedicated field
+/// (`title`, `priority`, `phase`, `dependencies`). `tags` is intentionally
+/// absent: it is allowed and merges.
+pub const RESERVED_FRONTMATTER_KEYS: &[&str] = &[
+    "id",
+    "title",
+    "status",
+    "priority",
+    "phase",
+    "dependencies",
+    "created_at",
+    "recurring",
+];
+
+/// Read a YAML scalar as a string (strings pass through, numbers/bools
+/// stringify), mirroring the task model's lenient coercion so a `tags` entry
+/// like `1` is not silently dropped.
+fn value_as_str(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
 }
 
 impl Rule {
@@ -140,6 +178,23 @@ impl Rule {
             && body.trim().is_empty()
         {
             bail!("rule `{}`: `body` must not be empty", self.key);
+        }
+        // Extra frontmatter (#040) may not clobber the keys karamd manages, and
+        // its `tags` (the one mergeable key) must be a list so the merge is
+        // well-defined rather than silently mangled.
+        if let Some(fm) = &self.frontmatter {
+            for (k, v) in fm {
+                let key = value_as_str(k).unwrap_or_default();
+                if RESERVED_FRONTMATTER_KEYS.contains(&key.as_str()) {
+                    bail!(
+                        "rule `{}`: `frontmatter.{key}` is managed by karamd and cannot be set",
+                        self.key
+                    );
+                }
+                if key == "tags" && !matches!(v, Value::Sequence(_)) {
+                    bail!("rule `{}`: `frontmatter.tags` must be a list", self.key);
+                }
+            }
         }
         // A field belonging to a different trigger is almost always a typo; the
         // trigger would silently ignore it. Reject it before the per-trigger
@@ -226,6 +281,44 @@ impl Rule {
             }
         }
         Ok(())
+    }
+
+    /// The rule's own `tags` followed by any `tags` from its `frontmatter` map,
+    /// order preserved, later duplicates dropped (#040). This is what the
+    /// generator writes so a rule can add e.g. `ai-runnable` alongside its
+    /// cosmetic tags.
+    pub fn merged_tags(&self) -> Vec<String> {
+        let mut out = self.tags.clone();
+        if let Some(fm) = &self.frontmatter
+            && let Some(Value::Sequence(seq)) = fm.get(Value::String("tags".into()))
+        {
+            for item in seq {
+                if let Some(s) = value_as_str(item)
+                    && !out.contains(&s)
+                {
+                    out.push(s);
+                }
+            }
+        }
+        out
+    }
+
+    /// The `frontmatter` entries to render verbatim onto the task: everything
+    /// except `tags` (merged into the tags line instead) and the reserved keys
+    /// (rejected by [`Rule::validate`], skipped here defensively). Empty when a
+    /// rule has no extra frontmatter, so the generator can skip the block.
+    pub fn extra_frontmatter(&self) -> Mapping {
+        let mut out = Mapping::new();
+        if let Some(fm) = &self.frontmatter {
+            for (k, v) in fm {
+                let key = value_as_str(k).unwrap_or_default();
+                if key == "tags" || RESERVED_FRONTMATTER_KEYS.contains(&key.as_str()) {
+                    continue;
+                }
+                out.insert(k.clone(), v.clone());
+            }
+        }
+        out
     }
 
     /// Reject any trigger-specific field that does not belong to this rule's
@@ -663,6 +756,119 @@ mod tests {
         let raw =
             "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  body: real\n";
         load_rules(raw).unwrap()[0].validate().unwrap();
+    }
+
+    #[test]
+    fn parses_frontmatter_map() {
+        let raw = "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  frontmatter:\n    tags: [ai-runnable, reporting]\n    ai_working_dir: /repo\n";
+        let rules = load_rules(raw).unwrap();
+        let fm = rules[0].frontmatter.as_ref().unwrap();
+        assert!(fm.contains_key(Value::String("tags".into())));
+        assert!(fm.contains_key(Value::String("ai_working_dir".into())));
+    }
+
+    #[test]
+    fn frontmatter_defaults_to_none() {
+        assert!(load_rules(SAMPLE).unwrap()[0].frontmatter.is_none());
+    }
+
+    #[test]
+    fn validate_rejects_reserved_frontmatter_keys() {
+        for key in RESERVED_FRONTMATTER_KEYS {
+            let raw = format!(
+                "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  frontmatter:\n    {key}: x\n"
+            );
+            let err = load_rules(&raw).unwrap()[0].validate().unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(&format!("frontmatter.{key}")),
+                "for {key}: {msg}"
+            );
+            assert!(msg.contains("managed by karamd"), "for {key}: {msg}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_non_list_frontmatter_tags() {
+        let raw = "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  frontmatter:\n    tags: solo\n";
+        let err = load_rules(raw).unwrap()[0].validate().unwrap_err();
+        assert!(err.to_string().contains("frontmatter.tags` must be a list"));
+    }
+
+    #[test]
+    fn validate_accepts_frontmatter_with_tags_and_custom_field() {
+        let raw = "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  frontmatter:\n    tags: [ai-runnable]\n    ai_working_dir: /repo\n    effort: small\n";
+        load_rules(raw).unwrap()[0].validate().unwrap();
+    }
+
+    #[test]
+    fn merged_tags_merges_and_dedups() {
+        // rule.tags first, then frontmatter tags, dropping duplicates. A bool
+        // stringifies; a non-scalar item (nested list) is dropped.
+        let raw = "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  tags: [personal, ai-runnable]\n  frontmatter:\n    tags: [ai-runnable, reporting, 7, true, [nested]]\n";
+        let r = &load_rules(raw).unwrap()[0];
+        assert_eq!(
+            r.merged_tags(),
+            vec!["personal", "ai-runnable", "reporting", "7", "true"]
+        );
+    }
+
+    #[test]
+    fn merged_tags_without_frontmatter_is_rule_tags() {
+        assert_eq!(
+            load_rules(SAMPLE).unwrap()[0].merged_tags(),
+            vec!["personal"]
+        );
+        // A frontmatter map without a `tags` key leaves rule tags untouched.
+        let raw = "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  tags: [x]\n  frontmatter:\n    ai_working_dir: /repo\n";
+        assert_eq!(load_rules(raw).unwrap()[0].merged_tags(), vec!["x"]);
+    }
+
+    #[test]
+    fn extra_frontmatter_excludes_tags_and_reserved() {
+        // `tags` merges elsewhere; a reserved key would be rejected by validate
+        // but is skipped defensively here too. Custom keys survive.
+        let mut fm = Mapping::new();
+        fm.insert(
+            "tags".into(),
+            Value::Sequence(vec![Value::String("x".into())]),
+        );
+        fm.insert("priority".into(), Value::String("high".into()));
+        fm.insert("ai_working_dir".into(), Value::String("/repo".into()));
+        let mut r = load_rules(SAMPLE).unwrap()[0].clone();
+        r.frontmatter = Some(fm);
+        let extra = r.extra_frontmatter();
+        assert!(!extra.contains_key(Value::String("tags".into())));
+        assert!(!extra.contains_key(Value::String("priority".into())));
+        assert_eq!(
+            extra.get(Value::String("ai_working_dir".into())),
+            Some(&Value::String("/repo".into()))
+        );
+    }
+
+    #[test]
+    fn extra_frontmatter_empty_without_map() {
+        assert!(
+            load_rules(SAMPLE).unwrap()[0]
+                .extra_frontmatter()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn frontmatter_round_trips_through_dump_load() {
+        let raw = "- key: k\n  title: t\n  trigger: after_completion\n  every_days: 3\n  frontmatter:\n    tags: [ai-runnable]\n    ai_working_dir: /repo\n";
+        let rules = load_rules(raw).unwrap();
+        let reparsed = load_rules(&dump_rules(&rules).unwrap()).unwrap();
+        assert_eq!(reparsed[0].merged_tags(), vec!["ai-runnable"]);
+        assert_eq!(
+            reparsed[0]
+                .frontmatter
+                .as_ref()
+                .unwrap()
+                .get(Value::String("ai_working_dir".into())),
+            Some(&Value::String("/repo".into()))
+        );
     }
 
     #[test]

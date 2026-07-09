@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use chrono::{Local, NaiveDate};
+use chrono::{Local, NaiveDate, Utc};
 use clap::{Parser, Subcommand};
 
 pub mod analyze;
@@ -31,6 +31,8 @@ pub mod next;
 pub mod output;
 pub mod query;
 pub mod rule;
+pub mod run;
+pub mod run_spawn;
 pub mod task;
 pub mod taskmd;
 pub mod terminal;
@@ -145,6 +147,9 @@ enum Commands {
         /// Markdown body (replaces the template/default body).
         #[arg(long)]
         body: Option<String>,
+        /// Create even if an open task with the exact same title exists.
+        #[arg(long)]
+        force: bool,
         #[command(flatten)]
         today: TodayArg,
         #[command(flatten)]
@@ -278,6 +283,10 @@ enum Commands {
         /// Order by configured phase before score.
         #[arg(long)]
         strict_phases: bool,
+        /// Only tasks `karamd run` would execute (tagged `ai-runnable`, attempts
+        /// left, not parked); ranks that set. Empty unless `run.enabled`.
+        #[arg(long)]
+        runnable: bool,
         #[command(flatten)]
         format: FormatArgs,
     },
@@ -314,6 +323,17 @@ enum Commands {
         vault: VaultArg,
         #[command(flatten)]
         format: FormatArgs,
+    },
+    /// Run a configured AI agent against tasks tagged `ai-runnable` (#039).
+    /// Off unless `run.enabled` is true in `.taskmd.yaml`.
+    Run {
+        #[command(flatten)]
+        vault: VaultArg,
+        /// List the tasks that would run without spawning anything.
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        today: TodayArg,
     },
     /// Serve the web UI (React SPA + JSON API) over the vault.
     Web {
@@ -614,6 +634,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
             depends_on,
             template,
             body,
+            force,
             today,
             format,
         } => {
@@ -628,13 +649,32 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
                 dependencies: depends_on,
                 template,
                 body,
+                force,
             };
-            let view = verbs::create(
+            let created = verbs::create(
                 &vault.vault,
                 &spec,
                 today.resolve(),
                 &mut taskmd::SystemEntropy::default(),
-            )?;
+            );
+            let view = match created {
+                Ok(view) => view,
+                // A title collision under --json becomes structured error output
+                // on stdout so scripted callers can branch (#038); every other
+                // error (and non-json) bubbles up to the human handler.
+                Err(e) => match e.downcast::<verbs::DuplicateOpenTitle>() {
+                    Ok(dup) if format.json => {
+                        let body = serde_json::json!({
+                            "error": dup.to_string(),
+                            "existing_id": dup.existing_id,
+                        });
+                        println!("{body}");
+                        return Ok(ExitCode::FAILURE);
+                    }
+                    Ok(dup) => return Err(dup.into()),
+                    Err(other) => return Err(other),
+                },
+            };
             let human = format!(
                 "karamd: created {} ({})",
                 view.id,
@@ -771,6 +811,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
             critical,
             phase,
             strict_phases,
+            runnable,
             format,
         } => {
             let v = taskmd::Vault::open(&vault.vault)?;
@@ -781,12 +822,20 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
                 .iter()
                 .map(|p| p.key().to_string())
                 .collect();
+            // `--runnable`: restrict to the set `run` would execute, computed by
+            // the same predicate (no drift), then rank it like any other `next`.
+            let only_ids = if runnable {
+                Some(run::plan(&v, Utc::now())?)
+            } else {
+                None
+            };
             let opts = next::Options {
                 limit,
                 quick_wins,
                 critical,
                 phase,
                 strict_phases,
+                only_ids,
             };
             let report = next::recommend(&scan.tasks, &phase_order, &opts);
             match format.format() {
@@ -848,6 +897,34 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
                 Format::Human => println!("{}", analyze::render_stats(&view)),
                 Format::Json => println!("{}", output::to_json(&view)?),
                 Format::Yaml => println!("{}", output::to_yaml(&view)?),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Commands::Run {
+            vault,
+            dry_run,
+            today,
+        } => {
+            let v = taskmd::Vault::open(&vault.vault)?;
+            let now = Utc::now();
+            if dry_run {
+                let ids = run::plan(&v, now)?;
+                if ids.is_empty() {
+                    println!("karamd: nothing runnable");
+                } else {
+                    for id in ids {
+                        println!("karamd: would run {id}");
+                    }
+                }
+            } else {
+                let report = run::run_all(&v, &run_spawn::ProcessRunner, now, today.resolve())?;
+                if report.ran.is_empty() {
+                    println!("karamd: nothing runnable");
+                } else {
+                    for r in &report.ran {
+                        println!("{}", run::render_result_line(r));
+                    }
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1378,6 +1455,30 @@ mod tests {
     }
 
     #[test]
+    fn generate_writes_rule_frontmatter_onto_task() {
+        // #040: a rule's `frontmatter` map lands on the generated task, with
+        // `tags` merged and a custom field carried verbatim, so a recurring
+        // rule can produce an `ai-runnable` task end to end.
+        let rules = "- key: fetch\n  title: Fetch KPIs\n  trigger: after_completion\n  every_days: 7\n  tags: [reporting]\n  frontmatter:\n    tags: [ai-runnable]\n    ai_working_dir: /repo\n";
+        let (vault, config) = vault_with_rules(rules);
+        generate(&vault, &config, day(2026, 7, 1), false).unwrap();
+        let files: Vec<_> = fs::read_dir(vault.join("tasks"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1);
+        let body = fs::read_to_string(&files[0]).unwrap();
+        assert!(
+            body.contains("tags: [\"reporting\", \"ai-runnable\"]"),
+            "got:\n{body}"
+        );
+        assert!(body.contains("ai_working_dir: /repo"), "got:\n{body}");
+        // Still a valid, parseable task.
+        let t = taskmd::model::Task::parse_required(&body).unwrap();
+        assert!(t.tags().contains(&"ai-runnable".to_string()));
+    }
+
+    #[test]
     fn run_defaults_config_to_taskmd_recurring_yaml() {
         // Omitting --config resolves to <vault>/.taskmd.recurring.yaml.
         let vault = tempdir();
@@ -1453,6 +1554,7 @@ mod tests {
             priority: None,
             tags: vec![],
             body: None,
+            frontmatter: None,
         }
     }
 
@@ -1641,6 +1743,36 @@ mod tests {
     }
 
     #[test]
+    fn run_create_rejects_duplicate_open_title() {
+        let vault = tempdir();
+        fs::create_dir_all(vault.join("tasks")).unwrap();
+        run_in(&vault, &["create", "Same title"]).unwrap();
+        // Plain (human) duplicate bubbles up as an error, writes nothing more.
+        let err = run_in(&vault, &["create", "Same title"]);
+        assert!(err.is_err());
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains("an open task with this title already exists")
+        );
+        // --json turns it into a non-zero exit with structured output on stdout.
+        assert_eq!(
+            run_in(&vault, &["create", "Same title", "--json"]).unwrap(),
+            ExitCode::FAILURE
+        );
+        // Only the first task was ever written.
+        assert_eq!(fs::read_dir(vault.join("tasks")).unwrap().count(), 1);
+        // --force creates the duplicate anyway.
+        assert_eq!(
+            run_in(&vault, &["create", "Same title", "--force"]).unwrap(),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(fs::read_dir(vault.join("tasks")).unwrap().count(), 2);
+        // A non-duplicate create failure still bubbles up as a normal error.
+        assert!(run_in(&vault, &["create", "Other", "--priority", "bogus"]).is_err());
+    }
+
+    #[test]
     fn run_create_with_template_and_machine_output() {
         let vault = tempdir();
         run_in(
@@ -1786,6 +1918,83 @@ mod tests {
         assert!(run_in(&vault, &["show", "404"]).is_err());
         // A failing create propagates through the CLI arm too.
         assert!(run_in(&vault, &["create", "X", "--priority", "urgent"]).is_err());
+    }
+
+    #[test]
+    fn run_run_arm_disabled_and_dry_run() {
+        // Feature off by default: both `run` and `run --dry-run` do nothing.
+        let vault = tempdir();
+        fs::create_dir_all(vault.join("tasks")).unwrap();
+        fs::write(
+            vault.join("tasks/001-a.md"),
+            "---\nid: \"001\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\n---\n",
+        )
+        .unwrap();
+        run_in(&vault, &["run"]).unwrap();
+        run_in(&vault, &["run", "--dry-run"]).unwrap();
+
+        // Enabled + a runnable task: --dry-run lists it, spawning nothing.
+        fs::write(
+            vault.join(".taskmd.yaml"),
+            "run:\n  enabled: true\n  agent: claude\n  agents:\n    claude:\n      command: [claude]\n",
+        )
+        .unwrap();
+        run_in(&vault, &["run", "--dry-run"]).unwrap();
+        // A malformed config propagates as an error through the arm.
+        fs::write(vault.join(".taskmd.yaml"), "run: [unclosed\n").unwrap();
+        assert!(run_in(&vault, &["run"]).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_run_arm_executes_and_reports() {
+        // A real spawn via the process runner, using `false` (always exits
+        // non-zero) so the task fails and the reporting path runs without
+        // depending on an AI tool being installed.
+        let vault = tempdir();
+        fs::create_dir_all(vault.join("tasks")).unwrap();
+        fs::write(
+            vault.join(".taskmd.yaml"),
+            "run:\n  enabled: true\n  agent: sh\n  max_attempts: 3\n  agents:\n    sh:\n      command: [\"false\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            vault.join("tasks/001-a.md"),
+            "---\nid: \"001\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\n---\n",
+        )
+        .unwrap();
+        run_in(&vault, &["run"]).unwrap();
+        // The failed attempt was recorded.
+        let body = fs::read_to_string(vault.join("tasks/001-a.md")).unwrap();
+        assert!(body.contains("ai_status: failed"));
+    }
+
+    #[test]
+    fn run_next_runnable_filters_to_the_run_selectable_set() {
+        // `next --runnable` ranks only what `run` would execute (#041).
+        let vault = tempdir();
+        fs::create_dir_all(vault.join("tasks")).unwrap();
+        fs::write(
+            vault.join(".taskmd.yaml"),
+            "run:\n  enabled: true\n  agents:\n    claude:\n      command: [claude]\n",
+        )
+        .unwrap();
+        // 001 is ai-runnable; 002 is not tagged, so it must be excluded.
+        fs::write(
+            vault.join("tasks/001-a.md"),
+            "---\nid: \"001\"\ntitle: A\nstatus: pending\npriority: high\ntags: [ai-runnable]\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            vault.join("tasks/002-b.md"),
+            "---\nid: \"002\"\ntitle: B\nstatus: pending\npriority: critical\n---\n",
+        )
+        .unwrap();
+        run_in(&vault, &["next", "--runnable"]).unwrap();
+        run_in(&vault, &["next", "--runnable", "--json"]).unwrap();
+        // With the feature off, --runnable ranks nothing.
+        fs::write(vault.join(".taskmd.yaml"), "phases: []\n").unwrap();
+        run_in(&vault, &["next", "--runnable"]).unwrap();
     }
 
     #[test]
