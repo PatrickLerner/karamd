@@ -440,8 +440,10 @@ impl Task {
     /// tolerating a hand-edited string value like the run loop does.
     pub fn ai_attempts(&self) -> Option<u32> {
         let v = self.get("ai_attempts")?;
+        // try_from, not `as`: a value above u32::MAX reads as unparseable
+        // (None) rather than silently wrapping to a small number.
         v.as_u64()
-            .map(|n| n as u32)
+            .and_then(|n| u32::try_from(n).ok())
             .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
     }
 
@@ -715,6 +717,10 @@ Body text.
         let bad =
             Task::parse_required("---\nid: \"1\"\ntitle: t\nai_attempts: [x]\n---\n").unwrap();
         assert_eq!(bad.ai_attempts(), None);
+        // A value above u32::MAX is rejected (None), never truncated/wrapped.
+        let huge = Task::parse_required("---\nid: \"1\"\ntitle: t\nai_attempts: 4294967296\n---\n")
+            .unwrap();
+        assert_eq!(huge.ai_attempts(), None);
         // Absent markers are all None.
         let plain = Task::parse_required("---\nid: \"1\"\ntitle: t\n---\n").unwrap();
         assert_eq!(plain.ai_status(), None);

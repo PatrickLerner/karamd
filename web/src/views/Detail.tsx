@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import { api, errorMessage } from "../api";
 import { ErrorBanner } from "../components/Banner";
-import { PriorityChip, StatusChip } from "../components/Chip";
+import { attemptsLabel, PriorityChip, StatusChip } from "../components/Chip";
 import { renderMarkdown, stripWikiLinks } from "../markdown";
 import { editHref, runHref, taskHref } from "../router";
 import type { Status, TaskDetail as Task, Workflow } from "../types";
@@ -141,9 +141,15 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
   const parked = task.tags.includes(FAILED_TAG);
   const runEnabled = configQ.data?.run_enabled ?? false;
   const runMaxAttempts = configQ.data?.run_max_attempts ?? 0;
-  // Show the run-state block whenever the task carries any `karamd run` marker.
+  // Show the run-state block whenever the task carries any `karamd run` marker,
+  // including a recorded error or start time with no status (hand-edited or a
+  // future run path), so the data is never silently hidden.
   const hasRunState =
-    task.ai_status !== null || task.ai_attempts !== null || parked;
+    task.ai_status !== null ||
+    task.ai_attempts !== null ||
+    task.ai_run_started !== null ||
+    task.ai_last_error !== null ||
+    parked;
   const toggleRunnable = () =>
     tagMutation.mutate(
       runnable
@@ -220,14 +226,14 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
           <h2>AI run state</h2>
           <dl className="frontmatter">
             <Field label="status">
-              {task.ai_status ?? (parked ? "parked" : null)}
+              {task.ai_status === "running"
+                ? "running"
+                : parked
+                  ? "parked"
+                  : task.ai_status}
             </Field>
             <Field label="attempts">
-              {task.ai_attempts !== null
-                ? `${task.ai_attempts} / ${runMaxAttempts}${
-                    parked ? " (parked)" : ""
-                  }`
-                : null}
+              {attemptsLabel(task.ai_attempts, runMaxAttempts) || null}
             </Field>
             <Field label="started">{task.ai_run_started}</Field>
             <Field label="last error">

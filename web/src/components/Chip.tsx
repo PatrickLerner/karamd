@@ -40,6 +40,17 @@ export function PriorityChip({
   return <span className={`chip ${PRIORITY_CLASS[priority]}`}>{priority}</span>;
 }
 
+// The "n/max" attempts label, shared by the list chip and the detail block.
+// Renders "" when there is no attempt count, and drops the denominator until
+// config resolves (maxAttempts <= 0) so a loading page never shows "2/0".
+export function attemptsLabel(
+  attempts: number | null,
+  maxAttempts: number,
+): string {
+  if (attempts === null) return "";
+  return maxAttempts > 0 ? `${attempts}/${maxAttempts}` : `${attempts}`;
+}
+
 // `karamd run` execution-state chip (#044). Renders only when a task carries run
 // state: actively running, a recorded failure, parked at max attempts, or any
 // attempt count. Idle/never-run tasks show nothing so the list stays quiet.
@@ -61,7 +72,10 @@ export function RunChip({
   if (!running && !failed && !parked && attempts === null) return null;
   const word = running ? "running" : parked ? "parked" : failed ? "failed" : "run";
   const cls = running ? "c-blue" : parked ? "c-red" : "c-orange";
-  const count = attempts === null ? "" : ` ${attempts}/${maxAttempts}`;
+  // Drop the "/max" denominator until config resolves (maxAttempts <= 0), so a
+  // fresh page never shows a nonsensical "2/0".
+  const label = attemptsLabel(attempts, maxAttempts);
+  const count = label === "" ? "" : ` ${label}`;
   const title = parked
     ? `AI execution parked after ${maxAttempts} attempts`
     : running
