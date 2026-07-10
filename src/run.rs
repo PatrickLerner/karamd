@@ -43,6 +43,10 @@ const K_LAST_ERROR: &str = "ai_last_error";
 const K_LAST_RUN: &str = "ai_last_run";
 const K_AGENT: &str = "ai_agent";
 const K_WORKING_DIR: &str = "ai_working_dir";
+/// Cancel request marker (#046): set by the web while a run is in flight; the
+/// concluding run (or a stale sweep) honours it, and it blocks re-selection in
+/// the meantime so a second run can't double-execute the task.
+const K_CANCEL: &str = "ai_cancel";
 const STATUS_RUNNING: &str = "running";
 const STATUS_FAILED: &str = "failed";
 
@@ -84,6 +88,9 @@ pub struct RunResult {
     pub detail: String,
     /// True when this failure pushed the task to `max_attempts` and parked it.
     pub parked: bool,
+    /// True when a web cancel (#046) ended this run: not a success, not a
+    /// failed attempt.
+    pub cancelled: bool,
 }
 
 /// What a `run` invocation did.
@@ -194,9 +201,82 @@ pub fn reconcile_stale(vault: &Vault, now: DateTime<Utc>) -> Result<Vec<String>>
         let mut t = vault.find(id)?;
         t.remove(K_STATUS);
         t.remove(K_STARTED);
+        // Also clear an orphaned cancel (#046): the cancelling run died before
+        // concluding, so drop the marker rather than block the task forever.
+        t.remove(K_CANCEL);
         vault.save(&t)?;
     }
     Ok(ids)
+}
+
+/// One in-flight `karamd run` execution, for the web sidebar (#046).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OngoingRun {
+    pub id: String,
+    pub title: String,
+    pub started_at: String,
+    pub attempts: u32,
+    /// The per-run `.log` file (relative to the log dir) holding its output.
+    pub log_file: String,
+}
+
+/// The runs currently executing: tasks with a fresh (non-stale) `running`
+/// marker and no pending cancel (#046). Ordered by id for a stable sidebar.
+pub fn ongoing(vault: &Vault, now: DateTime<Utc>) -> Result<Vec<OngoingRun>> {
+    let timeout = vault.config.run.timeout_secs;
+    let mut runs: Vec<OngoingRun> = vault
+        .scan()?
+        .tasks
+        .iter()
+        .filter_map(|t| {
+            if t.get(K_STATUS).and_then(|v| v.as_str()) != Some(STATUS_RUNNING) {
+                return None;
+            }
+            if t.get(K_CANCEL).is_some() {
+                return None;
+            }
+            let started = t.get(K_STARTED).and_then(|v| v.as_str())?;
+            let start_dt = DateTime::parse_from_rfc3339(started)
+                .ok()?
+                .with_timezone(&Utc);
+            if is_stale(Some(started), now, timeout) {
+                return None;
+            }
+            Some(OngoingRun {
+                id: t.id(),
+                title: t.title(),
+                started_at: started.to_string(),
+                attempts: read_attempts(t),
+                log_file: run_log_filename(start_dt, &t.id()),
+            })
+        })
+        .collect();
+    runs.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(runs)
+}
+
+/// Tail of a per-run `.log` file (#046), at most `max_bytes` from the end.
+/// A missing file (agent produced nothing yet, or logging was off) reads as
+/// empty rather than an error, so the web log view degrades gracefully.
+pub fn run_log_tail(log_dir: &Path, log_file: &str, max_bytes: usize) -> String {
+    let bytes = std::fs::read(log_dir.join(log_file)).unwrap_or_default();
+    let start = bytes.len().saturating_sub(max_bytes);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
+/// Request cancellation of an in-flight run (#046): stamp the cancel marker so
+/// the concluding run (or a stale sweep) clears it without counting a failed
+/// attempt, and it drops out of the sidebar and the selectable set immediately.
+/// Returns whether a running task was actually marked (false for an unknown or
+/// not-running task).
+pub fn cancel_run(vault: &Vault, id: &str, now: DateTime<Utc>) -> Result<bool> {
+    let mut task = vault.find(id)?;
+    if task.get(K_STATUS).and_then(|v| v.as_str()) != Some(STATUS_RUNNING) {
+        return Ok(false);
+    }
+    task.set(K_CANCEL, Value::String(now.to_rfc3339()));
+    vault.save(&task)?;
+    Ok(true)
 }
 
 /// Selection predicate: eligible iff tagged runnable, not parked, not terminal,
@@ -208,6 +288,9 @@ pub fn is_runnable(task: &Task, cfg: &RunConfig, now: DateTime<Utc>) -> bool {
         && !task.effective_status().is_terminal()
         && read_attempts(task) < cfg.max_attempts
         && !is_locked(task, cfg, now)
+        // A pending cancel (#046) blocks re-selection until the current run
+        // concludes and clears it, so a cancelled task is never double-picked.
+        && task.get(K_CANCEL).is_none()
 }
 
 /// Render the prompt from the template, interpolating the task's fields and its
@@ -290,7 +373,9 @@ pub fn record_failure(task: &mut Task, detail: &str, today: NaiveDate, max_attem
 
 /// One human-readable status line for a finished run (used by the CLI).
 pub fn render_result_line(r: &RunResult) -> String {
-    if r.succeeded {
+    if r.cancelled {
+        format!("karamd: ran {} -> cancelled", r.id)
+    } else if r.succeeded {
         format!("karamd: ran {} -> completed", r.id)
     } else if r.parked {
         format!(
@@ -498,6 +583,48 @@ fn run_one(
     // The attempt number as run (post-increment), captured before
     // record_success clears the counter.
     let attempt = read_attempts(&after);
+
+    // A cancel requested mid-run (#046): clear the run markers, refund the
+    // pre-incremented attempt (a cancel is not a failed attempt), and record the
+    // outcome as cancelled rather than success/failure.
+    if after.get(K_CANCEL).is_some() {
+        after.remove(K_STATUS);
+        after.remove(K_STARTED);
+        after.remove(K_CANCEL);
+        after.remove(K_LAST_ERROR);
+        let refunded = attempt.saturating_sub(1);
+        if refunded == 0 {
+            after.remove(K_ATTEMPTS);
+        } else {
+            after.set(K_ATTEMPTS, Value::from(refunded as u64));
+        }
+        vault.save(&after)?;
+        let record = RunRecord {
+            id: id.to_string(),
+            agent: agent_name,
+            command,
+            working_dir: working_dir.to_string_lossy().into_owned(),
+            started_at: started.to_rfc3339(),
+            ended_at: (started + chrono::Duration::seconds(outcome.duration_s)).to_rfc3339(),
+            duration_s: outcome.duration_s,
+            attempt,
+            exit_code: outcome.exit_code,
+            outcome: "cancelled".to_string(),
+            last_error: None,
+            log_file,
+        };
+        if let Err(e) = write_run_log(log_dir, &record, cfg.log_retention) {
+            eprintln!("karamd: warning: run log write failed for {id}: {e}");
+        }
+        return Ok(RunResult {
+            id: id.to_string(),
+            succeeded: false,
+            detail: "cancelled".to_string(),
+            parked: false,
+            cancelled: true,
+        });
+    }
+
     let terminal = after.effective_status().is_terminal();
     let (succeeded, detail) = if outcome.success && terminal {
         (true, String::new())
@@ -550,6 +677,7 @@ fn run_one(
         succeeded,
         detail,
         parked,
+        cancelled: false,
     })
 }
 
@@ -877,6 +1005,7 @@ mod tests {
             succeeded: true,
             detail: String::new(),
             parked: false,
+            cancelled: false,
         };
         assert!(render_result_line(&ok).contains("-> completed"));
         let parked = RunResult {
@@ -884,6 +1013,7 @@ mod tests {
             succeeded: false,
             detail: "x".into(),
             parked: true,
+            cancelled: false,
         };
         assert!(render_result_line(&parked).contains("parked (ai-failed)"));
         let failed = RunResult {
@@ -891,9 +1021,18 @@ mod tests {
             succeeded: false,
             detail: "y".into(),
             parked: false,
+            cancelled: false,
         };
         let line = render_result_line(&failed);
         assert!(line.contains("-> failed: y") && !line.contains("parked"));
+        let cancelled = RunResult {
+            id: "4".into(),
+            succeeded: false,
+            detail: "cancelled".into(),
+            parked: false,
+            cancelled: true,
+        };
+        assert!(render_result_line(&cancelled).contains("-> cancelled"));
     }
 
     // ---- selection ----
@@ -1467,5 +1606,173 @@ mod tests {
             vec!["001", "002"]
         );
         assert_eq!(runner.calls.lock().unwrap().len(), 2);
+    }
+
+    // ---- ongoing runs, log tail, cancel (#046) ----
+
+    #[test]
+    fn ongoing_lists_fresh_uncancelled_running() {
+        let fresh = format!(
+            "---\nid: \"001\"\ntitle: Live\ntags: [ai-runnable]\nai_status: running\nai_run_started: {}\nai_attempts: 1\n---\n",
+            now().to_rfc3339()
+        );
+        let stale = "---\nid: \"002\"\ntitle: Dead\ntags: [ai-runnable]\nai_status: running\nai_run_started: 2020-01-01T00:00:00Z\n---\n";
+        let cancelled = format!(
+            "---\nid: \"003\"\ntitle: Cx\ntags: [ai-runnable]\nai_status: running\nai_run_started: {}\nai_cancel: {}\n---\n",
+            now().to_rfc3339(),
+            now().to_rfc3339()
+        );
+        let idle = "---\nid: \"004\"\ntitle: Idle\ntags: [ai-runnable]\n---\n";
+        let no_start =
+            "---\nid: \"005\"\ntitle: NoStart\ntags: [ai-runnable]\nai_status: running\n---\n";
+        let bad_start = "---\nid: \"006\"\ntitle: Bad\ntags: [ai-runnable]\nai_status: running\nai_run_started: not-a-date\n---\n";
+        // A second fresh running task, filed after 001 so the sort has work to do.
+        let fresh2 = format!(
+            "---\nid: \"000\"\ntitle: Also\ntags: [ai-runnable]\nai_status: running\nai_run_started: {}\n---\n",
+            now().to_rfc3339()
+        );
+        let (vault, _) = build_vault(
+            CFG,
+            &[
+                ("001.md", &fresh),
+                ("002.md", stale),
+                ("003.md", &cancelled),
+                ("004.md", idle),
+                ("005.md", no_start),
+                ("006.md", bad_start),
+                ("000.md", &fresh2),
+            ],
+        );
+        let runs = ongoing(&vault, now()).unwrap();
+        // Only the fresh, uncancelled, parseable-start running tasks qualify,
+        // sorted by id.
+        assert_eq!(
+            runs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["000", "001"]
+        );
+        let live = runs.iter().find(|r| r.id == "001").unwrap();
+        assert_eq!(live.title, "Live");
+        assert_eq!(live.attempts, 1);
+        assert_eq!(live.log_file, run_log_filename(now(), "001"));
+    }
+
+    #[test]
+    fn run_log_tail_reads_tail_and_missing() {
+        let dir = tempdir();
+        fs::write(dir.join("x.log"), "hello world").unwrap();
+        assert_eq!(run_log_tail(&dir, "x.log", 5), "world");
+        assert_eq!(run_log_tail(&dir, "x.log", 100), "hello world");
+        // A missing log file degrades to empty, not an error.
+        assert_eq!(run_log_tail(&dir, "missing.log", 100), "");
+    }
+
+    #[test]
+    fn cancel_run_marks_only_running_tasks() {
+        let running = format!(
+            "---\nid: \"001\"\ntitle: t\ntags: [ai-runnable]\nai_status: running\nai_run_started: {}\n---\n",
+            now().to_rfc3339()
+        );
+        let idle = "---\nid: \"002\"\ntitle: t\ntags: [ai-runnable]\n---\n";
+        let (vault, _) = build_vault(CFG, &[("001-a.md", &running), ("002-b.md", idle)]);
+        assert!(cancel_run(&vault, "001", now()).unwrap());
+        assert!(reload(&vault, "001").get("ai_cancel").is_some());
+        // A not-running task has nothing to cancel.
+        assert!(!cancel_run(&vault, "002", now()).unwrap());
+        // An unknown id errors.
+        assert!(cancel_run(&vault, "999", now()).is_err());
+    }
+
+    #[test]
+    fn cancel_marker_blocks_selection() {
+        let task = format!(
+            "---\nid: \"001\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\nai_cancel: {}\n---\n",
+            now().to_rfc3339()
+        );
+        let (vault, _) = build_vault(CFG, &[("001-a.md", &task)]);
+        assert!(plan(&vault, now()).unwrap().is_empty());
+    }
+
+    /// A runner that simulates a web cancel arriving mid-run by stamping the
+    /// cancel marker on the task while the agent is "working".
+    struct CancelingRunner {
+        path: PathBuf,
+    }
+
+    impl AgentRunner for CancelingRunner {
+        fn run(
+            &self,
+            _spec: &AgentSpec,
+            _prompt: &str,
+            _working_dir: &Path,
+            _timeout_secs: u64,
+            _log_path: Option<&Path>,
+        ) -> AgentOutcome {
+            let mut t = Task::parse_required(&fs::read_to_string(&self.path).unwrap()).unwrap();
+            t.set(K_CANCEL, Value::String(now().to_rfc3339()));
+            fs::write(&self.path, t.to_markdown()).unwrap();
+            AgentOutcome {
+                success: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    #[test]
+    fn run_one_honors_cancel_without_burning_attempt() {
+        let (vault, dir) = build_vault(CFG, &[("001-a.md", &runnable_task("001"))]);
+        let runner = CancelingRunner {
+            path: dir.join("tasks/001-a.md"),
+        };
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        assert_eq!(report.ran.len(), 1);
+        assert!(report.ran[0].cancelled);
+        assert!(!report.ran[0].succeeded);
+        let t = reload(&vault, "001");
+        assert!(t.get("ai_status").is_none());
+        assert!(t.get("ai_cancel").is_none());
+        // The pre-incremented attempt is refunded (back to none).
+        assert!(t.get("ai_attempts").is_none());
+        // The run is logged with a cancelled outcome.
+        let recs = read_records(&dir.join(".karamd/runs"));
+        assert_eq!(recs[0].outcome, "cancelled");
+        assert!(recs[0].last_error.is_none());
+    }
+
+    #[test]
+    fn run_one_cancel_refunds_to_a_positive_count() {
+        // Starting at 1 attempt: mark_running -> 2, cancel refunds back to 1.
+        let task = "---\nid: \"001\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\nai_attempts: 1\n---\n";
+        let (vault, dir) = build_vault(CFG, &[("001-a.md", task)]);
+        let runner = CancelingRunner {
+            path: dir.join("tasks/001-a.md"),
+        };
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        assert!(report.ran[0].cancelled);
+        assert_eq!(
+            reload(&vault, "001")
+                .get("ai_attempts")
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn cancel_log_write_failure_is_nonfatal() {
+        // Cancelled runs still log best-effort: an unwritable log dir must not
+        // abort the run.
+        let dir = tempdir();
+        fs::write(dir.join("blocker"), "x").unwrap();
+        let cfg = format!(
+            "run:\n  enabled: true\n  agent: claude\n  max_attempts: 2\n  log_dir: {}\n  agents:\n    claude:\n      command: [claude]\n",
+            dir.join("blocker/sub").display()
+        );
+        fs::write(dir.join(".taskmd.yaml"), cfg).unwrap();
+        fs::write(dir.join("tasks/001-a.md"), runnable_task("001")).unwrap();
+        let vault = Vault::open(&dir).unwrap();
+        let runner = CancelingRunner {
+            path: dir.join("tasks/001-a.md"),
+        };
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        assert!(report.ran[0].cancelled);
     }
 }

@@ -204,3 +204,12 @@ export interface SessionInfo {
   running: boolean;
   exit_code: number | null;
 }
+
+// One in-flight `karamd run` execution shown in the sidebar (#046).
+export interface OngoingRun {
+  id: string;
+  title: string;
+  started_at: string;
+  attempts: number;
+  log_file: string;
+}

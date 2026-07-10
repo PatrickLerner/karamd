@@ -8,6 +8,7 @@ export type Pane =
   | { kind: "detail"; id: string }
   | { kind: "edit"; id: string }
   | { kind: "run"; id: string; agent: string | null }
+  | { kind: "runlog"; id: string }
   | { kind: "new" }
   | { kind: "rules" };
 
@@ -26,6 +27,9 @@ export function parseHash(hash: string): Route {
   if (rest === "" || rest === "/") return { tab, pane: { kind: "none" } };
   if (rest === "/new") return { tab, pane: { kind: "new" } };
   if (rest === "/rules") return { tab, pane: { kind: "rules" } };
+  const runlog = rest.match(/^\/task\/([^/]+)\/runlog$/);
+  if (runlog)
+    return { tab, pane: { kind: "runlog", id: decodeURIComponent(runlog[1]) } };
   const run = rest.match(/^\/task\/([^/]+)\/run(?:\/([^/]+))?$/);
   if (run)
     return {
@@ -73,6 +77,9 @@ export function editHref(tab: string, id: string): string {
 export function runHref(tab: string, id: string, agent?: string | null): string {
   const base = `#/view/${enc(tab)}/task/${enc(id)}/run`;
   return agent ? `${base}/${enc(agent)}` : base;
+}
+export function runLogHref(tab: string, id: string): string {
+  return `#/view/${enc(tab)}/task/${enc(id)}/runlog`;
 }
 export function newHref(tab: string): string {
   return `#/view/${enc(tab)}/new`;

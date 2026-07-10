@@ -25,7 +25,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -413,6 +413,58 @@ async fn set_status(
     Ok(Json(DetailOut::from(&view)).into_response())
 }
 
+/// Cap on the per-run log tail returned to the web log view (#046).
+const RUN_LOG_TAIL_BYTES: usize = 64 * 1024;
+
+#[derive(Serialize)]
+struct RunLogOut {
+    log: String,
+}
+
+#[derive(Serialize)]
+struct CancelOut {
+    cancelled: bool,
+}
+
+/// GET /api/runs — the in-flight `karamd run` executions, for the sidebar (#046).
+async fn list_runs(State(state): State<AppState>) -> std::result::Result<Response, ApiError> {
+    let vault = Vault::open(&state.root)?;
+    let runs = crate::run::ongoing(&vault, Utc::now())?;
+    Ok(Json(runs).into_response())
+}
+
+/// GET /api/runs/{id}/log — tail of a run's captured output (#046). Empty when
+/// the task isn't running or produced nothing yet.
+async fn run_log(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> std::result::Result<Response, ApiError> {
+    let vault = Vault::open(&state.root)?;
+    let task = vault.find(&id)?;
+    let log = match task
+        .ai_run_started()
+        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+    {
+        Some(dt) => {
+            let log_dir = vault.config.run.resolve_log_dir(&vault.root);
+            let file = crate::run::run_log_filename(dt.with_timezone(&Utc), &id);
+            crate::run::run_log_tail(&log_dir, &file, RUN_LOG_TAIL_BYTES)
+        }
+        None => String::new(),
+    };
+    Ok(Json(RunLogOut { log }).into_response())
+}
+
+/// POST /api/runs/{id}/cancel — request cancellation of an in-flight run (#046).
+async fn cancel_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> std::result::Result<Response, ApiError> {
+    let vault = Vault::open(&state.root)?;
+    let cancelled = crate::run::cancel_run(&vault, &id, Utc::now())?;
+    Ok(Json(CancelOut { cancelled }).into_response())
+}
+
 /// GET /api/config — phases (for grouping) and the completion workflow.
 async fn get_config(State(state): State<AppState>) -> std::result::Result<Response, ApiError> {
     let vault = Vault::open(&state.root)?;
@@ -628,6 +680,9 @@ fn app(root: PathBuf, web_dir: PathBuf, run_command: String) -> Router {
             "/api/sessions/{id}",
             delete(crate::web_terminal::kill_session),
         )
+        .route("/api/runs", get(list_runs))
+        .route("/api/runs/{id}/log", get(run_log))
+        .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/config", get(get_config))
         .route("/api/next", get(next_tasks))
         .route("/api/rules", get(get_rules).put(put_rules))
@@ -994,6 +1049,69 @@ mod tests {
         let (status, body) = call(&root, req).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(body["error"].as_str().unwrap().contains("invalid status"));
+    }
+
+    #[tokio::test]
+    async fn runs_list_log_and_cancel() {
+        let root = tempdir();
+        // A fresh running task with a per-run log file on disk.
+        write_task(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: Live\nstatus: pending\ntags: [ai-runnable]\nai_status: running\nai_run_started: 2999-01-01T00:00:00Z\nai_attempts: 1\n---\n\n# Live\n",
+        );
+        let log_dir = root.join(".karamd/runs");
+        fs::create_dir_all(&log_dir).unwrap();
+        let log_file = crate::run::run_log_filename(
+            "2999-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap(),
+            "001",
+        );
+        fs::write(log_dir.join(&log_file), "agent output here").unwrap();
+
+        // The sidebar lists the ongoing run (started far in the future so it's
+        // never stale relative to the test clock).
+        let (status, runs) = call(&root, get("/api/runs")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(runs.as_array().unwrap().len(), 1);
+        assert_eq!(runs[0]["id"], "001");
+        assert_eq!(runs[0]["title"], "Live");
+        assert_eq!(runs[0]["attempts"], 1);
+
+        // The log view returns the captured output.
+        let (status, body) = call(&root, get("/api/runs/001/log")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["log"], "agent output here");
+
+        // Cancel marks the running task.
+        let req = json_req("POST", "/api/runs/001/cancel", serde_json::json!({}));
+        let (status, body) = call(&root, req).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["cancelled"], true);
+        // Once cancelled it drops out of the sidebar.
+        let (_, runs) = call(&root, get("/api/runs")).await;
+        assert!(runs.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_log_empty_when_not_running_and_cancel_unknown_404() {
+        let root = tempdir();
+        write_task(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: Idle\nstatus: pending\ntags: [ai-runnable]\n---\n\n# Idle\n",
+        );
+        // No ai_run_started: the log is empty rather than an error.
+        let (status, body) = call(&root, get("/api/runs/001/log")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["log"], "");
+        // Cancelling a not-running task reports cancelled=false.
+        let req = json_req("POST", "/api/runs/001/cancel", serde_json::json!({}));
+        let (_, body) = call(&root, req).await;
+        assert_eq!(body["cancelled"], false);
+        // Cancelling an unknown task is a 404.
+        let req = json_req("POST", "/api/runs/404/cancel", serde_json::json!({}));
+        let (status, _) = call(&root, req).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

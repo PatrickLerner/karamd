@@ -14,6 +14,7 @@ import {
   newHref,
   rulesHref,
   runHref,
+  runLogHref,
   tabHref,
   useRoute,
   type Pane,
@@ -30,11 +31,13 @@ import type {
   Config,
   InvalidTask,
   NextItem,
+  OngoingRun,
   SessionInfo,
   TaskSummary,
 } from "./types";
 import { Detail } from "./views/Detail";
 import { List } from "./views/List";
+import { RunLog } from "./views/RunLog";
 import { Rules } from "./views/Rules";
 import { TaskForm } from "./views/TaskForm";
 import { Terminal } from "./views/Terminal";
@@ -54,6 +57,8 @@ function paneFor(pane: Pane, tab: string): ReactNode {
           agent={pane.agent}
         />
       );
+    case "runlog":
+      return <RunLog key={`runlog-${pane.id}`} id={pane.id} tab={tab} />;
     case "new":
       return <TaskForm key="new" tab={tab} />;
     case "rules":
@@ -90,6 +95,11 @@ function App() {
     queryFn: () => api.sessions(),
     refetchInterval: 3000,
   });
+  const runsQ = useQuery({
+    queryKey: ["runs"],
+    queryFn: () => api.runs(),
+    refetchInterval: 3000,
+  });
 
   const config: Config = configQ.data ?? {
     phases: [],
@@ -104,6 +114,7 @@ function App() {
   const tasks: TaskSummary[] | null = tasksQ.data?.tasks ?? null;
   const invalid: InvalidTask[] = tasksQ.data?.invalid ?? [];
   const sessions: SessionInfo[] = sessionsQ.data ?? [];
+  const runs: OngoingRun[] = runsQ.data ?? [];
   const rankById = useMemo(
     () => new Map((nextQ.data ?? []).map((n: NextItem) => [n.id, n.rank])),
     [nextQ.data],
@@ -144,10 +155,17 @@ function App() {
   const pane = route.pane;
   const paneOpen = pane.kind !== "none";
   const activeSessionId = pane.kind === "run" ? pane.id : null;
+  const activeRunId = pane.kind === "runlog" ? pane.id : null;
 
   async function killSession(id: string) {
     await api.killSession(id).catch(() => {});
     void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+  }
+
+  async function cancelRun(id: string) {
+    await api.cancelRun(id).catch(() => {});
+    void queryClient.invalidateQueries({ queryKey: ["runs"] });
+    void queryClient.invalidateQueries({ queryKey: ["tasks"] });
   }
 
   return (
@@ -173,6 +191,13 @@ function App() {
             setMenuOpen(false);
           }}
           onKillSession={(id) => void killSession(id)}
+          runs={runs}
+          activeRunId={activeRunId}
+          onSelectRun={(id) => {
+            navigate(runLogHref(tabForLinks, id));
+            setMenuOpen(false);
+          }}
+          onCancelRun={(id) => void cancelRun(id)}
           onOpenRules={() => {
             navigate(rulesHref(tabForLinks));
             setMenuOpen(false);

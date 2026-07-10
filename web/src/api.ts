@@ -1,6 +1,7 @@
 import type {
   Config,
   NextItem,
+  OngoingRun,
   PreviewResponse,
   Rule,
   RulesResponse,
@@ -76,4 +77,9 @@ export const api = {
     fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).then(
       () => undefined,
     ),
+  runs: (): Promise<OngoingRun[]> => request("/runs"),
+  runLog: (id: string): Promise<{ log: string }> =>
+    request(`/runs/${encodeURIComponent(id)}/log`),
+  cancelRun: (id: string): Promise<{ cancelled: boolean }> =>
+    request(`/runs/${encodeURIComponent(id)}/cancel`, jsonInit("POST", {})),
 };
