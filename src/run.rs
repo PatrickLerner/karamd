@@ -402,6 +402,11 @@ fn append_jsonl(path: &Path, line: &str) -> Result<()> {
 /// as a line to `runs.jsonl`, then prune to `retention`. Best-effort: the
 /// caller warns and continues on error rather than failing the run.
 pub fn write_run_log(log_dir: &Path, record: &RunRecord, retention: usize) -> Result<()> {
+    // Serialize the append + prune across this process's concurrent runs (#042),
+    // so two batch threads can't interleave a line or have one prune drop a line
+    // the other just appended. (Cross-process races are out of scope.)
+    static LOG_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOG_WRITE_LOCK.lock().unwrap();
     std::fs::create_dir_all(log_dir)?;
     let line = serde_json::to_string(record)?;
     append_jsonl(&log_dir.join("runs.jsonl"), &line)?;
@@ -735,7 +740,16 @@ pub fn run_all(
             .tasks
             .iter()
             .filter(|t| is_runnable(t, cfg, now) && !done.contains(&t.id()))
-            .map(|t| (t.id(), resolve_working_dir(t, cfg, &vault.root)))
+            .map(|t| {
+                // Canonicalize for the per-dir dedup so two tasks pointing at the
+                // same directory via different strings (relative, symlink, `.`)
+                // are recognised as the same dir and never batched together
+                // (#042). A path that doesn't resolve yet falls back to the raw
+                // form.
+                let dir = resolve_working_dir(t, cfg, &vault.root);
+                let canon = dir.canonicalize().unwrap_or(dir);
+                (t.id(), canon)
+            })
             .collect();
         // Up to `concurrency` distinct-working-dir tasks per round (#042), never
         // exceeding the remaining `max_per_invocation` budget (#049).
