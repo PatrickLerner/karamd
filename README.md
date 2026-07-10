@@ -40,6 +40,44 @@ and the taskmd spec. When the taskmd spec version changes (regenerate with
 `taskmd spec --stdout`) or karamd's CLI surface changes, update the matching
 `skills/<name>/SKILL.md` in the same change.
 
+### opencode
+
+The same three `skills/<name>/SKILL.md` files are valid
+[opencode skills](https://opencode.ai/docs/skills/) unchanged — the format is
+identical (`SKILL.md` + `name`/`description` frontmatter, loaded on demand).
+opencode does not read Claude plugin marketplaces, so expose them through one of
+its skill-discovery directories. Symlink each skill folder into the global
+opencode skills dir (do **not** use the `skills.paths` config key — it shows up
+in `opencode debug skill` but is not handed to the agent's `skill` tool):
+
+```sh
+mkdir -p ~/.config/opencode/skills
+for s in karamd-cli karamd-recurring taskmd-format; do
+  ln -sfn "$PWD/skills/$s" ~/.config/opencode/skills/"$s"
+done
+```
+
+Symlinks keep the single `skills/` tree as the source of truth for both tools —
+no copies to sync. Verify the agent actually sees them (not just discovery):
+
+```sh
+opencode run 'List the names of every skill available to you.'
+```
+
+The three names must appear. `opencode run` starts a fresh server each time, so
+it reflects changes immediately.
+
+**Gotcha:** the opencode TUI runs a per-project server that scans skills **once
+at startup** — no hot reload. After adding or changing skills, closing the TUI
+window is not enough; fully kill the process (`pkill -f opencode`) and relaunch,
+or the old skill list persists. (This, not symlinks, is why a freshly added
+skill can appear via `opencode run`/`opencode debug skill` yet be missing in an
+already-open TUI.)
+
+For clone-free remote distribution, publish the skills under a
+`.well-known/skills/` endpoint and use `"skills": { "urls": [...] }` in
+`~/.config/opencode/opencode.jsonc` instead.
+
 ## Recurring generation
 
 Reads a rules file, inspects existing tasks, and creates a new task file only
