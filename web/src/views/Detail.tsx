@@ -223,7 +223,7 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
           </select>
         )}
         <a className="btn" href={runHref(tab, id, selectedAgent)}>
-          Run with {selectedAgent ?? "Claude"}
+          {selectedAgent ? `Run with ${selectedAgent}` : "Run in terminal"}
         </a>
         <button
           type="button"

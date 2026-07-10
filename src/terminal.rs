@@ -76,17 +76,16 @@ pub fn seed_prompt(task: &Task) -> String {
     prompt
 }
 
-/// Build the argv for an interactive terminal launch from a configured agent's
-/// command (#047). Unlike `karamd run`, the terminal is human-driven, so the
-/// prompt-delivery placeholder tokens (`{prompt}` / `{prompt_file}`) that the
-/// headless runner substitutes are dropped here; the caller seeds the task
-/// prompt as the final argument instead, matching the plain run-command path.
+/// The interactive-terminal launch argv for a configured agent (#047): just the
+/// agent's program (the tool being picked), with none of its `karamd run`
+/// arguments. The headless `run.agents` command carries non-interactive flags
+/// (`-p`), prompt-delivery placeholders (`{prompt}` / `{prompt_file}`), and
+/// stdin/file prompt modes that would break or hang a human-driven session; the
+/// terminal only needs the tool itself and seeds the task prompt as the final
+/// argument (matching the plain run-command path). An empty command yields no
+/// argv (the caller reports it).
 pub fn launch_argv(command: &[String]) -> Vec<String> {
-    command
-        .iter()
-        .filter(|a| a.as_str() != "{prompt}" && a.as_str() != "{prompt_file}")
-        .cloned()
-        .collect()
+    command.first().cloned().into_iter().collect()
 }
 
 /// Split a command string into argv with minimal shell-like quoting: whitespace
@@ -160,23 +159,24 @@ mod tests {
     }
 
     #[test]
-    fn launch_argv_drops_prompt_placeholders() {
-        // The headless-style claude command loses its `{prompt}` token so the
-        // caller can seed the prompt as the final argument instead.
+    fn launch_argv_keeps_only_the_program() {
+        // Headless flags, placeholders, and subcommands are all dropped: the
+        // terminal launches the tool itself and seeds the prompt separately.
         assert_eq!(
             launch_argv(&["claude".into(), "-p".into(), "{prompt}".into()]),
-            vec!["claude", "-p"]
+            vec!["claude"]
         );
-        // A `{prompt_file}` token is dropped too.
-        assert_eq!(
-            launch_argv(&["tool".into(), "{prompt_file}".into(), "--x".into()]),
-            vec!["tool", "--x"]
-        );
-        // A command with no placeholder is unchanged (e.g. an opencode stdin agent).
         assert_eq!(
             launch_argv(&["opencode".into(), "run".into()]),
-            vec!["opencode", "run"]
+            vec!["opencode"]
         );
+        // An embedded placeholder (headless substring substitution) can't leak.
+        assert_eq!(
+            launch_argv(&["tool".into(), "task: {prompt}".into()]),
+            vec!["tool"]
+        );
+        // An empty command yields no argv.
+        assert!(launch_argv(&[]).is_empty());
     }
 
     #[test]

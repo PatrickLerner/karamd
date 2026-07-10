@@ -76,6 +76,9 @@ const BROADCAST_CAP: usize = 1024;
 /// `events` and can push stdin via `in_tx`.
 struct Session {
     title: String,
+    /// The argv this session was spawned with; a new attach requesting a
+    /// different tool (#047) relaunches rather than reattaching to the old one.
+    argv: Vec<String>,
     scrollback: Arc<Mutex<Scrollback>>,
     events: broadcast::Sender<TermEvent>,
     in_tx: std::sync::mpsc::Sender<ToPty>,
@@ -107,7 +110,14 @@ impl SessionRegistry {
     ) -> std::result::Result<Arc<Session>, String> {
         let mut map = self.sessions.lock().unwrap();
         if let Some(existing) = map.get(id) {
-            return Ok(existing.clone());
+            // Same tool: reattach to the live session (persistence, #021). A
+            // different tool was picked (#047): kill the old one and relaunch,
+            // so the chosen agent actually starts.
+            if existing.argv == argv {
+                return Ok(existing.clone());
+            }
+            let _ = existing.killer.lock().unwrap().kill();
+            map.remove(id);
         }
         let session = spawn_session(title, root, argv, prompt)?;
         map.insert(id.to_string(), session.clone());
@@ -272,6 +282,7 @@ fn spawn_session(
 
     Ok(Arc::new(Session {
         title: title.to_string(),
+        argv,
         scrollback,
         events,
         in_tx,
