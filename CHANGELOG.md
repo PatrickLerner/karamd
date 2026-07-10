@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-10
+
 ### Added
 
 - Web UI: a per-task **AI-runnable** toggle in the task detail view adds or
@@ -217,6 +219,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   triggers, idempotent creation via a `recurring:` frontmatter marker, `--dry-run`
   and `--today` overrides, Nix flake, and CI.
 
+[0.8.0]: https://github.com/PatrickLerner/karamd/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/PatrickLerner/karamd/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/PatrickLerner/karamd/compare/v0.6.0...v0.6.1
 [0.3.0]: https://github.com/PatrickLerner/karamd/compare/v0.2.0...v0.3.0
