@@ -170,11 +170,18 @@ pub struct RunConfig {
 }
 
 impl RunConfig {
-    /// Absolute per-run log directory: `run.log_dir` if set, else
-    /// `<vault>/.karamd/runs`.
+    /// Per-run log directory: `run.log_dir` if set (a relative path is resolved
+    /// against the vault root, not the process CWD), else `<vault>/.karamd/runs`.
     pub fn resolve_log_dir(&self, vault_root: &Path) -> PathBuf {
         match &self.log_dir {
-            Some(dir) => PathBuf::from(dir),
+            Some(dir) => {
+                let p = PathBuf::from(dir);
+                if p.is_absolute() {
+                    p
+                } else {
+                    vault_root.join(p)
+                }
+            }
             None => vault_root.join(".karamd").join("runs"),
         }
     }
@@ -463,10 +470,16 @@ scopes:
         assert_eq!(c.run.log_dir.as_deref(), Some("/var/log/karamd"));
         assert_eq!(c.run.log_retention, 50);
         assert_eq!(c.run.max_per_invocation, 3);
-        // An explicit dir wins over the vault-relative default.
+        // An absolute dir wins over the vault-relative default.
         assert_eq!(
             c.run.resolve_log_dir(Path::new("/v")),
             PathBuf::from("/var/log/karamd")
+        );
+        // A relative log_dir is resolved against the vault, not the CWD.
+        let rel: Config = serde_norway::from_str("run:\n  log_dir: logs/runs\n").unwrap();
+        assert_eq!(
+            rel.run.resolve_log_dir(Path::new("/v")),
+            PathBuf::from("/v/logs/runs")
         );
     }
 

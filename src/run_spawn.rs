@@ -68,12 +68,19 @@ impl AgentRunner for ProcessRunner {
             return fail("agent command is empty");
         }
 
-        // Open the per-run log up front so a spawn failure is still recorded as
-        // an (empty) artifact the run index can point at.
+        // Open the per-run log for the tee. Logging is best-effort: if the file
+        // can't be created, warn and fall back to inherited output rather than
+        // failing the agent (which would burn an attempt for a logging problem).
         let log_file = match log_path {
             Some(p) => match File::create(p) {
                 Ok(f) => Some(Arc::new(Mutex::new(f))),
-                Err(e) => return fail(format!("opening run log {}: {e}", p.display())),
+                Err(e) => {
+                    eprintln!(
+                        "karamd: warning: could not open run log {}: {e}; continuing without capture",
+                        p.display()
+                    );
+                    None
+                }
             },
             None => None,
         };
@@ -127,21 +134,20 @@ impl AgentRunner for ProcessRunner {
             let _ = stdin.write_all(text.as_bytes());
         }
 
-        // Tee threads (only when capturing).
-        let mut pumps = Vec::new();
+        // Tee threads (only when capturing). Detached, not joined: a grandchild
+        // that inherits and holds the pipe open would keep the reader from ever
+        // seeing EOF, so joining could hang the whole run forever. The threads
+        // end on their own at EOF, or are torn down when the process exits.
         if let Some(log) = &log_file {
             if let Some(out) = child.stdout.take() {
-                pumps.push(tee(out, std::io::stdout(), Some(log.clone())));
+                tee(out, std::io::stdout(), Some(log.clone()));
             }
             if let Some(err) = child.stderr.take() {
-                pumps.push(tee(err, std::io::stderr(), Some(log.clone())));
+                tee(err, std::io::stderr(), Some(log.clone()));
             }
         }
 
         let outcome = wait_with_timeout(&mut child, start, timeout_secs);
-        for p in pumps {
-            let _ = p.join();
-        }
         cleanup(prompt_file.as_deref());
         outcome
     }

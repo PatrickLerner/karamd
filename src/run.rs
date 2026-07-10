@@ -307,8 +307,13 @@ pub fn write_run_log(log_dir: &Path, record: &RunRecord, retention: usize) -> Re
     Ok(())
 }
 
-/// Keep only the `keep` most-recent records in `runs.jsonl` and delete any
-/// `.log` file not referenced by a kept record. `keep == 0` disables pruning.
+/// Keep only the `keep` most-recent records in `runs.jsonl`, deleting the `.log`
+/// files of the records that fall off the end. `keep == 0` disables pruning.
+///
+/// Only the dropped records' own `.log` files are removed, and only when no
+/// retained record still points at them: karamd never deletes a file it didn't
+/// record (so a shared/misconfigured `log_dir` keeps its foreign files) nor a
+/// concurrent run's not-yet-indexed `.log`.
 pub fn prune_logs(log_dir: &Path, keep: usize) -> Result<()> {
     if keep == 0 {
         return Ok(());
@@ -316,29 +321,29 @@ pub fn prune_logs(log_dir: &Path, keep: usize) -> Result<()> {
     let index = log_dir.join("runs.jsonl");
     let content = std::fs::read_to_string(&index)?;
     let lines: Vec<&str> = content.lines().collect();
-    let kept: Vec<&str> = if lines.len() > keep {
-        lines[lines.len() - keep..].to_vec()
-    } else {
-        lines.clone()
-    };
-    // Rewrite the index atomically only when we actually trimmed something.
-    if kept.len() != lines.len() {
-        let tmp = log_dir.join("runs.jsonl.tmp");
-        std::fs::write(&tmp, format!("{}\n", kept.join("\n")))?;
-        std::fs::rename(&tmp, &index)?;
+    if lines.len() <= keep {
+        return Ok(());
     }
-    // The `.log` files still referenced by a kept record; everything else is an
-    // orphan to delete. A corrupt (unparseable) kept line just references
-    // nothing.
-    let referenced: std::collections::HashSet<String> = kept
+    let (dropped, kept) = lines.split_at(lines.len() - keep);
+    // Log files a retained record still points at must survive even if an older
+    // dropped record referenced the same file.
+    let kept_refs: std::collections::HashSet<String> = kept
         .iter()
         .filter_map(|l| serde_json::from_str::<RunRecord>(l).ok())
         .map(|r| r.log_file)
         .collect();
-    for entry in std::fs::read_dir(log_dir)?.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".log") && !referenced.contains(&name) {
-            let _ = std::fs::remove_file(entry.path());
+    // Rewrite the index to the kept lines. A per-process temp name avoids two
+    // concurrent runs clobbering a shared temp path.
+    let tmp = log_dir.join(format!("runs.jsonl.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, format!("{}\n", kept.join("\n")))?;
+    std::fs::rename(&tmp, &index)?;
+    // Delete only the dropped records' own log files (skipping unparseable
+    // lines), never anything a kept record still references.
+    for line in dropped {
+        if let Ok(r) = serde_json::from_str::<RunRecord>(line)
+            && !kept_refs.contains(&r.log_file)
+        {
+            let _ = std::fs::remove_file(log_dir.join(&r.log_file));
         }
     }
     Ok(())
@@ -374,6 +379,10 @@ fn run_one(
     now: DateTime<Utc>,
     today: NaiveDate,
 ) -> Result<RunResult> {
+    // Real wall-clock start of this task, for the audit record: with the
+    // re-scan loop (#049) tasks run sequentially over time, so the per-invocation
+    // tick `now` (used for the lock marker) is not each task's true start.
+    let started = Utc::now();
     let mut staged = vault.find(id)?;
     mark_running(&mut staged, now);
     vault.save(&staged)?;
@@ -456,8 +465,8 @@ fn run_one(
         agent: agent_name,
         command,
         working_dir: working_dir.to_string_lossy().into_owned(),
-        started_at: now.to_rfc3339(),
-        ended_at: (now + chrono::Duration::seconds(outcome.duration_s)).to_rfc3339(),
+        started_at: started.to_rfc3339(),
+        ended_at: (started + chrono::Duration::seconds(outcome.duration_s)).to_rfc3339(),
         duration_s: outcome.duration_s,
         attempt,
         exit_code: outcome.exit_code,
@@ -498,6 +507,10 @@ pub fn run_all(
         return Ok(report);
     }
     let log_dir = cfg.resolve_log_dir(&vault.root);
+    // Create the log dir up front so the runner can open a per-run log file on
+    // the very first run against a fresh vault (#045). Best-effort: if it fails,
+    // the runner falls back to no capture and the run still proceeds.
+    let _ = std::fs::create_dir_all(&log_dir);
     // Rewrite ghost `running` markers from crashed prior runs before selecting,
     // so a dead run never lingers as "running" (#048).
     reconcile_stale(vault, now)?;
@@ -1144,28 +1157,64 @@ mod tests {
     }
 
     #[test]
-    fn prune_logs_zero_is_noop_and_corrupt_line_orphans() {
+    fn prune_logs_zero_noop_and_leaves_foreign_files() {
         let dir = tempdir();
         let log_dir = dir.join("logs");
         fs::create_dir_all(&log_dir).unwrap();
-        fs::write(log_dir.join("runs.jsonl"), "{\"bad\":true}\n").unwrap();
-        fs::write(log_dir.join("x.log"), "y").unwrap();
-        // keep = 0: no pruning even though x.log is unreferenced.
+        fs::write(
+            log_dir.join("runs.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::to_string(&record("1", "a.log")).unwrap()
+            ),
+        )
+        .unwrap();
+        // A .log karamd did not record (shared/foreign dir, or a concurrent run
+        // whose record is not yet appended).
+        fs::write(log_dir.join("foreign.log"), "external").unwrap();
+        // keep = 0: no pruning at all.
         prune_logs(&log_dir, 0).unwrap();
-        assert!(log_dir.join("x.log").exists());
-        // keep >= line count: no trim, but the corrupt line references nothing,
-        // so the unreferenced x.log is deleted as an orphan.
+        assert!(log_dir.join("foreign.log").exists());
+        // keep >= line count: nothing dropped, so nothing deleted; the foreign
+        // file is never touched.
         prune_logs(&log_dir, 5).unwrap();
+        assert!(log_dir.join("foreign.log").exists());
+        // A missing index with keep > 0 surfaces the read error.
+        assert!(prune_logs(&dir.join("nope"), 5).is_err());
+    }
+
+    #[test]
+    fn prune_logs_deletes_only_dropped_and_keeps_referenced() {
+        let dir = tempdir();
+        let log_dir = dir.join("logs");
+        fs::create_dir_all(&log_dir).unwrap();
+        // Four lines: a corrupt one, then two pointing at a shared log, then one
+        // at c.log. keep = 2 drops the first two.
+        let l = |id: &str, log: &str| serde_json::to_string(&record(id, log)).unwrap();
+        let lines = format!(
+            "{}\n{}\n{}\n{}\n",
+            "{not json",
+            l("1", "shared.log"),
+            l("2", "shared.log"),
+            l("3", "c.log"),
+        );
+        fs::write(log_dir.join("runs.jsonl"), lines).unwrap();
+        for f in ["shared.log", "c.log"] {
+            fs::write(log_dir.join(f), "x").unwrap();
+        }
+        prune_logs(&log_dir, 2).unwrap();
+        // The corrupt dropped line is skipped (no panic, no delete). shared.log
+        // is dropped by record 1 but still referenced by kept record 2, so it
+        // survives. The index is trimmed to the last two lines.
+        assert!(log_dir.join("shared.log").exists());
+        assert!(log_dir.join("c.log").exists());
         assert_eq!(
             fs::read_to_string(log_dir.join("runs.jsonl"))
                 .unwrap()
                 .lines()
                 .count(),
-            1
+            2
         );
-        assert!(!log_dir.join("x.log").exists());
-        // A missing index with keep > 0 surfaces the read error.
-        assert!(prune_logs(&dir.join("nope"), 5).is_err());
     }
 
     #[test]
