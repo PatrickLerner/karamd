@@ -155,6 +155,24 @@ pub struct RunConfig {
     pub max_attempts: u32,
     /// Prompt template; `{id}`, `{title}`, `{body}`, `{path}` are interpolated.
     pub prompt_template: String,
+    /// Directory for per-run logs (#045). Absent resolves to
+    /// `<vault>/.karamd/runs`. Each execution appends a JSON record to
+    /// `runs.jsonl` and tees the agent's output to a per-run `.log` file.
+    pub log_dir: Option<String>,
+    /// How many most-recent run records to keep; older records and their
+    /// `.log` files are pruned. `0` keeps everything (no prune).
+    pub log_retention: usize,
+}
+
+impl RunConfig {
+    /// Absolute per-run log directory: `run.log_dir` if set, else
+    /// `<vault>/.karamd/runs`.
+    pub fn resolve_log_dir(&self, vault_root: &Path) -> PathBuf {
+        match &self.log_dir {
+            Some(dir) => PathBuf::from(dir),
+            None => vault_root.join(".karamd").join("runs"),
+        }
+    }
 }
 
 impl Default for RunConfig {
@@ -167,6 +185,8 @@ impl Default for RunConfig {
             timeout_secs: 900,
             max_attempts: 3,
             prompt_template: DEFAULT_PROMPT_TEMPLATE.into(),
+            log_dir: None,
+            log_retention: 1000,
         }
     }
 }
@@ -417,9 +437,29 @@ scopes:
         assert_eq!(c.run.timeout_secs, 900);
         assert_eq!(c.run.max_attempts, 3);
         assert!(c.run.prompt_template.contains("{id}"));
+        // Per-run log defaults (#045): no explicit dir, keep 1000 records.
+        assert_eq!(c.run.log_dir, None);
+        assert_eq!(c.run.log_retention, 1000);
+        assert_eq!(
+            c.run.resolve_log_dir(Path::new("/v")),
+            PathBuf::from("/v/.karamd/runs")
+        );
         // Absent `run:` section behaves as the default (off).
         let c: Config = serde_norway::from_str("dir: t\n").unwrap();
         assert!(!c.run.enabled);
+    }
+
+    #[test]
+    fn run_config_parses_log_knobs() {
+        let raw = "run:\n  enabled: true\n  log_dir: /var/log/karamd\n  log_retention: 50\n";
+        let c: Config = serde_norway::from_str(raw).unwrap();
+        assert_eq!(c.run.log_dir.as_deref(), Some("/var/log/karamd"));
+        assert_eq!(c.run.log_retention, 50);
+        // An explicit dir wins over the vault-relative default.
+        assert_eq!(
+            c.run.resolve_log_dir(Path::new("/v")),
+            PathBuf::from("/var/log/karamd")
+        );
     }
 
     #[test]

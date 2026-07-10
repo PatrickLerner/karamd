@@ -48,15 +48,22 @@ const STATUS_FAILED: &str = "failed";
 
 /// What a single agent invocation produced. Spawn errors and timeouts are
 /// encoded as `success: false` with a `detail`, so the runner never fails the
-/// whole loop.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// whole loop. `exit_code`/`duration_s` feed the per-run log (#045).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AgentOutcome {
     pub success: bool,
     pub detail: String,
+    /// Process exit code when the agent actually ran to completion; `None` for
+    /// a spawn failure, timeout, or unresolved agent.
+    pub exit_code: Option<i32>,
+    /// Wall-clock seconds the agent ran (0 when it never started).
+    pub duration_s: i64,
 }
 
 /// Spawns one agent. Behind a trait so the orchestration is tested with a fake
-/// and only the real process glue ([`crate::run_spawn`]) is excluded.
+/// and only the real process glue ([`crate::run_spawn`]) is excluded. When
+/// `log_path` is set the runner tees the agent's stdout/stderr to that file
+/// (#045) in addition to inheriting them to the console.
 pub trait AgentRunner {
     fn run(
         &self,
@@ -64,6 +71,7 @@ pub trait AgentRunner {
         prompt: &str,
         working_dir: &Path,
         timeout_secs: u64,
+        log_path: Option<&Path>,
     ) -> AgentOutcome;
 }
 
@@ -82,6 +90,32 @@ pub struct RunResult {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct RunReport {
     pub ran: Vec<RunResult>,
+}
+
+/// One durable per-run log record (#045), appended as a line to `runs.jsonl`
+/// and pointing at the `.log` file holding the agent's tee'd output.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RunRecord {
+    pub id: String,
+    pub agent: String,
+    pub command: Vec<String>,
+    pub working_dir: String,
+    pub started_at: String,
+    pub ended_at: String,
+    pub duration_s: i64,
+    pub attempt: u32,
+    pub exit_code: Option<i32>,
+    /// `completed` | `failed` | `parked`.
+    pub outcome: String,
+    pub last_error: Option<String>,
+    /// The per-run `.log` filename (relative to the log dir).
+    pub log_file: String,
+}
+
+/// The per-run `.log` filename for a task, derived from the run start so the
+/// web (#046) can recompute it from `ai_run_started` + id.
+pub fn run_log_filename(started: DateTime<Utc>, id: &str) -> String {
+    format!("{}-{}.log", started.format("%Y%m%dT%H%M%SZ"), id)
 }
 
 /// Current attempt count, tolerating a hand-edited string value.
@@ -217,6 +251,65 @@ pub fn render_result_line(r: &RunResult) -> String {
     }
 }
 
+/// Append one JSON line to the run index, creating the file if needed.
+fn append_jsonl(path: &Path, line: &str) -> Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(f, "{line}")?;
+    Ok(())
+}
+
+/// Persist one run record (#045): ensure the log dir exists, append the record
+/// as a line to `runs.jsonl`, then prune to `retention`. Best-effort: the
+/// caller warns and continues on error rather than failing the run.
+pub fn write_run_log(log_dir: &Path, record: &RunRecord, retention: usize) -> Result<()> {
+    std::fs::create_dir_all(log_dir)?;
+    let line = serde_json::to_string(record)?;
+    append_jsonl(&log_dir.join("runs.jsonl"), &line)?;
+    prune_logs(log_dir, retention)?;
+    Ok(())
+}
+
+/// Keep only the `keep` most-recent records in `runs.jsonl` and delete any
+/// `.log` file not referenced by a kept record. `keep == 0` disables pruning.
+pub fn prune_logs(log_dir: &Path, keep: usize) -> Result<()> {
+    if keep == 0 {
+        return Ok(());
+    }
+    let index = log_dir.join("runs.jsonl");
+    let content = std::fs::read_to_string(&index)?;
+    let lines: Vec<&str> = content.lines().collect();
+    let kept: Vec<&str> = if lines.len() > keep {
+        lines[lines.len() - keep..].to_vec()
+    } else {
+        lines.clone()
+    };
+    // Rewrite the index atomically only when we actually trimmed something.
+    if kept.len() != lines.len() {
+        let tmp = log_dir.join("runs.jsonl.tmp");
+        std::fs::write(&tmp, format!("{}\n", kept.join("\n")))?;
+        std::fs::rename(&tmp, &index)?;
+    }
+    // The `.log` files still referenced by a kept record; everything else is an
+    // orphan to delete. A corrupt (unparseable) kept line just references
+    // nothing.
+    let referenced: std::collections::HashSet<String> = kept
+        .iter()
+        .filter_map(|l| serde_json::from_str::<RunRecord>(l).ok())
+        .map(|r| r.log_file)
+        .collect();
+    for entry in std::fs::read_dir(log_dir)?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".log") && !referenced.contains(&name) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    Ok(())
+}
+
 /// The ids `run` would execute this tick, without mutating anything (dry-run).
 pub fn plan(vault: &Vault, now: DateTime<Utc>) -> Result<Vec<String>> {
     let cfg = &vault.config.run;
@@ -250,6 +343,7 @@ pub fn run_all(
     if !cfg.enabled {
         return Ok(report);
     }
+    let log_dir = cfg.resolve_log_dir(&vault.root);
     let scan = vault.scan()?;
     let ids: Vec<String> = scan
         .tasks
@@ -272,18 +366,43 @@ pub fn run_all(
             .unwrap_or_default();
         let prompt = render_prompt(&cfg.prompt_template, &staged, &abs_path.to_string_lossy());
         let working_dir = resolve_working_dir(&staged, cfg, &vault.root);
+        let agent_name = staged
+            .get(K_AGENT)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| cfg.agent.clone());
+        let log_file = run_log_filename(now, &id);
+        let log_path = log_dir.join(&log_file);
 
-        let outcome = match resolve_agent(cfg, &staged) {
-            Ok(spec) => runner.run(spec, &prompt, &working_dir, cfg.timeout_secs),
-            Err(detail) => AgentOutcome {
-                success: false,
-                detail,
-            },
+        // The resolved agent supplies the command for the log; an unknown agent
+        // is a failure that never spawns, with no exit code or output file.
+        let (outcome, command) = match resolve_agent(cfg, &staged) {
+            Ok(spec) => (
+                runner.run(
+                    spec,
+                    &prompt,
+                    &working_dir,
+                    cfg.timeout_secs,
+                    Some(&log_path),
+                ),
+                spec.command.clone(),
+            ),
+            Err(detail) => (
+                AgentOutcome {
+                    success: false,
+                    detail,
+                    ..Default::default()
+                },
+                Vec::new(),
+            ),
         };
 
         // Re-read post-agent: the agent may have run `karamd complete`, so the
         // status on disk is the source of truth for the success check.
         let mut after = vault.find(&id)?;
+        // The attempt number as run (post-increment), captured before
+        // record_success clears the counter.
+        let attempt = read_attempts(&after);
         let terminal = after.effective_status().is_terminal();
         let (succeeded, detail) = if outcome.success && terminal {
             (true, String::new())
@@ -303,6 +422,34 @@ pub fn run_all(
         }
         vault.save(&after)?;
         let parked = after.tags().iter().any(|t| t == FAILED_TAG);
+
+        // Durable per-run record (#045). Best-effort: a log failure must not
+        // abort the run or lose the outcome.
+        let outcome_str = if succeeded {
+            "completed"
+        } else if parked {
+            "parked"
+        } else {
+            "failed"
+        };
+        let record = RunRecord {
+            id: id.clone(),
+            agent: agent_name,
+            command,
+            working_dir: working_dir.to_string_lossy().into_owned(),
+            started_at: now.to_rfc3339(),
+            ended_at: (now + chrono::Duration::seconds(outcome.duration_s)).to_rfc3339(),
+            duration_s: outcome.duration_s,
+            attempt,
+            exit_code: outcome.exit_code,
+            outcome: outcome_str.to_string(),
+            last_error: (!detail.is_empty()).then(|| detail.clone()),
+            log_file,
+        };
+        if let Err(e) = write_run_log(&log_dir, &record, cfg.log_retention) {
+            eprintln!("karamd: warning: run log write failed for {id}: {e}");
+        }
+
         report.ran.push(RunResult {
             id,
             succeeded,
@@ -370,6 +517,7 @@ mod tests {
         prompt: String,
         working_dir: PathBuf,
         timeout: u64,
+        log_path: Option<PathBuf>,
     }
 
     struct FakeRunner {
@@ -393,13 +541,22 @@ mod tests {
             prompt: &str,
             working_dir: &Path,
             timeout_secs: u64,
+            log_path: Option<&Path>,
         ) -> AgentOutcome {
             self.calls.borrow_mut().push(Recorded {
                 command: spec.command.clone(),
                 prompt: prompt.to_string(),
                 working_dir: working_dir.to_path_buf(),
                 timeout: timeout_secs,
+                log_path: log_path.map(Path::to_path_buf),
             });
+            // Simulate the tee: drop some captured output at the log path so the
+            // orchestration's per-run logging (#045) has a real file to point at.
+            // Best-effort, like the real runner: an unwritable path is ignored.
+            if let Some(p) = log_path {
+                let _ = p.parent().map(std::fs::create_dir_all);
+                let _ = fs::write(p, b"fake agent output\n");
+            }
             match &self.mode {
                 Mode::Complete(path) => {
                     let mut t = Task::parse_required(&fs::read_to_string(path).unwrap()).unwrap();
@@ -408,15 +565,20 @@ mod tests {
                     AgentOutcome {
                         success: true,
                         detail: String::new(),
+                        exit_code: Some(0),
+                        duration_s: 7,
                     }
                 }
                 Mode::SucceedNoComplete => AgentOutcome {
                     success: true,
-                    detail: String::new(),
+                    exit_code: Some(0),
+                    ..Default::default()
                 },
                 Mode::Fail(d) => AgentOutcome {
                     success: false,
                     detail: d.clone(),
+                    exit_code: Some(1),
+                    duration_s: 3,
                 },
             }
         }
@@ -726,5 +888,172 @@ mod tests {
             runner.calls.borrow()[0].working_dir,
             PathBuf::from("/custom/repo")
         );
+    }
+
+    // ---- per-run logs (#045) ----
+
+    fn read_records(log_dir: &Path) -> Vec<RunRecord> {
+        fs::read_to_string(log_dir.join("runs.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn record(id: &str, log: &str) -> RunRecord {
+        RunRecord {
+            id: id.into(),
+            agent: "claude".into(),
+            command: vec!["claude".into()],
+            working_dir: "/w".into(),
+            started_at: "2026-07-09T12:00:00Z".into(),
+            ended_at: "2026-07-09T12:00:00Z".into(),
+            duration_s: 0,
+            attempt: 1,
+            exit_code: None,
+            outcome: "completed".into(),
+            last_error: None,
+            log_file: log.into(),
+        }
+    }
+
+    #[test]
+    fn run_log_filename_is_timestamp_and_id() {
+        assert_eq!(run_log_filename(now(), "042"), "20260709T120000Z-042.log");
+    }
+
+    #[test]
+    fn success_writes_run_log_record_and_output() {
+        let (vault, dir) = build_vault(CFG, &[("001-fetch.md", &runnable_task("001"))]);
+        let path = dir.join("tasks/001-fetch.md");
+        let runner = FakeRunner::new(Mode::Complete(path));
+        run_all(&vault, &runner, now(), today()).unwrap();
+        // The runner was handed a log path to tee into.
+        assert!(runner.calls.borrow()[0].log_path.is_some());
+        let log_dir = dir.join(".karamd/runs");
+        let recs = read_records(&log_dir);
+        assert_eq!(recs.len(), 1);
+        let r = &recs[0];
+        assert_eq!(r.id, "001");
+        assert_eq!(r.outcome, "completed");
+        assert_eq!(r.exit_code, Some(0));
+        assert_eq!(r.duration_s, 7);
+        assert_eq!(r.attempt, 1);
+        assert_eq!(r.agent, "claude");
+        assert_eq!(r.command, vec!["claude", "-p", "{prompt}"]);
+        assert!(r.last_error.is_none());
+        assert_ne!(r.started_at, r.ended_at, "7s duration moves the end time");
+        // The per-run .log holds the tee'd bytes.
+        let out = fs::read_to_string(log_dir.join(&r.log_file)).unwrap();
+        assert_eq!(out, "fake agent output\n");
+    }
+
+    #[test]
+    fn failure_run_log_records_error() {
+        let (vault, dir) = build_vault(CFG, &[("001-a.md", &runnable_task("001"))]);
+        let runner = FakeRunner::new(Mode::Fail("boom".into()));
+        run_all(&vault, &runner, now(), today()).unwrap();
+        let recs = read_records(&dir.join(".karamd/runs"));
+        assert_eq!(recs[0].outcome, "failed");
+        assert_eq!(recs[0].exit_code, Some(1));
+        assert_eq!(recs[0].last_error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn parked_run_log_records_parked_outcome() {
+        let cfg = "run:\n  enabled: true\n  agent: claude\n  max_attempts: 1\n  agents:\n    claude:\n      command: [claude]\n";
+        let (vault, dir) = build_vault(cfg, &[("001-a.md", &runnable_task("001"))]);
+        let runner = FakeRunner::new(Mode::Fail("nope".into()));
+        run_all(&vault, &runner, now(), today()).unwrap();
+        assert_eq!(read_records(&dir.join(".karamd/runs"))[0].outcome, "parked");
+    }
+
+    #[test]
+    fn run_log_write_failure_is_nonfatal() {
+        // log_dir points under a regular file, so create_dir_all fails; the run
+        // must still be recorded (best-effort logging).
+        let dir = tempdir();
+        fs::write(dir.join("blocker"), "x").unwrap();
+        let cfg = format!(
+            "run:\n  enabled: true\n  agent: claude\n  max_attempts: 2\n  log_dir: {}\n  agents:\n    claude:\n      command: [claude]\n",
+            dir.join("blocker/sub").display()
+        );
+        fs::write(dir.join(".taskmd.yaml"), cfg).unwrap();
+        fs::write(dir.join("tasks/001-a.md"), runnable_task("001")).unwrap();
+        let vault = Vault::open(&dir).unwrap();
+        let runner = FakeRunner::new(Mode::Fail("x".into()));
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        assert_eq!(report.ran.len(), 1);
+    }
+
+    #[test]
+    fn prune_logs_keeps_recent_and_deletes_orphans() {
+        let dir = tempdir();
+        let log_dir = dir.join("logs");
+        fs::create_dir_all(&log_dir).unwrap();
+        let lines = format!(
+            "{}\n{}\n{}\n",
+            serde_json::to_string(&record("1", "a.log")).unwrap(),
+            serde_json::to_string(&record("2", "b.log")).unwrap(),
+            serde_json::to_string(&record("3", "c.log")).unwrap(),
+        );
+        fs::write(log_dir.join("runs.jsonl"), lines).unwrap();
+        for f in ["a.log", "b.log", "c.log"] {
+            fs::write(log_dir.join(f), "x").unwrap();
+        }
+        prune_logs(&log_dir, 1).unwrap();
+        let idx = fs::read_to_string(log_dir.join("runs.jsonl")).unwrap();
+        assert_eq!(idx.lines().count(), 1);
+        assert!(idx.contains("c.log"));
+        assert!(!log_dir.join("a.log").exists());
+        assert!(!log_dir.join("b.log").exists());
+        assert!(log_dir.join("c.log").exists());
+    }
+
+    #[test]
+    fn prune_logs_zero_is_noop_and_corrupt_line_orphans() {
+        let dir = tempdir();
+        let log_dir = dir.join("logs");
+        fs::create_dir_all(&log_dir).unwrap();
+        fs::write(log_dir.join("runs.jsonl"), "{\"bad\":true}\n").unwrap();
+        fs::write(log_dir.join("x.log"), "y").unwrap();
+        // keep = 0: no pruning even though x.log is unreferenced.
+        prune_logs(&log_dir, 0).unwrap();
+        assert!(log_dir.join("x.log").exists());
+        // keep >= line count: no trim, but the corrupt line references nothing,
+        // so the unreferenced x.log is deleted as an orphan.
+        prune_logs(&log_dir, 5).unwrap();
+        assert_eq!(
+            fs::read_to_string(log_dir.join("runs.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert!(!log_dir.join("x.log").exists());
+        // A missing index with keep > 0 surfaces the read error.
+        assert!(prune_logs(&dir.join("nope"), 5).is_err());
+    }
+
+    #[test]
+    fn write_run_log_appends_across_runs() {
+        let dir = tempdir();
+        let log_dir = dir.join("runs"); // does not exist yet
+        write_run_log(&log_dir, &record("1", "a.log"), 0).unwrap();
+        write_run_log(&log_dir, &record("2", "b.log"), 0).unwrap();
+        assert_eq!(read_records(&log_dir).len(), 2);
+    }
+
+    #[test]
+    fn write_run_log_errors_on_bad_paths() {
+        // Parent is a regular file: create_dir_all fails.
+        let dir = tempdir();
+        fs::write(dir.join("f"), "x").unwrap();
+        assert!(write_run_log(&dir.join("f/sub"), &record("1", "a.log"), 0).is_err());
+        // Index path is a directory: the append open fails.
+        let log_dir = dir.join("runs");
+        fs::create_dir_all(&log_dir).unwrap();
+        fs::create_dir(log_dir.join("runs.jsonl")).unwrap();
+        assert!(write_run_log(&log_dir, &record("1", "a.log"), 0).is_err());
     }
 }
