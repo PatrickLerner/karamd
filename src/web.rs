@@ -32,8 +32,18 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::next;
 use crate::output::TaskView;
 use crate::rule::{self, Rule};
-use crate::taskmd::{Graph, Status, SystemEntropy, Vault};
+use crate::taskmd::{Graph, Status, SystemEntropy, Task, Vault};
 use crate::verbs;
+
+/// Treat a stale `running` marker as not-running for display (#048): a dead run
+/// (crash/reboot) that the read path self-corrects, so the UI never shows a
+/// ghost run while waiting for the next `karamd run` to rewrite the file.
+fn clear_stale_run(view: &mut TaskView, task: &Task, timeout_secs: u64) {
+    if crate::run::is_running_stale(task, timeout_secs, chrono::Utc::now()) {
+        view.ai_status = None;
+        view.ai_run_started = None;
+    }
+}
 
 /// Shared handler state: the vault root plus the command `run` sessions spawn
 /// (#010). A fresh [`Vault`] is opened per request (cheap; re-reads config),
@@ -291,10 +301,15 @@ async fn list_tasks(State(state): State<AppState>) -> std::result::Result<Respon
     let vault = Vault::open(&state.root)?;
     let scan = vault.scan()?;
     let graph = Graph::build(&scan.tasks);
+    let timeout = vault.config.run.timeout_secs;
     let tasks = scan
         .tasks
         .iter()
-        .map(|t| SummaryOut::from(&TaskView::build(t, &graph, false)))
+        .map(|t| {
+            let mut view = TaskView::build(t, &graph, false);
+            clear_stale_run(&mut view, t, timeout);
+            SummaryOut::from(&view)
+        })
         .collect();
     let invalid = scan
         .invalid
@@ -312,7 +327,11 @@ async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> std::result::Result<Response, ApiError> {
-    let view = verbs::show(&state.root, &id)?;
+    let mut view = verbs::show(&state.root, &id)?;
+    // Self-correct a ghost `running` marker for display (#048).
+    let vault = Vault::open(&state.root)?;
+    let task = vault.find(&id)?;
+    clear_stale_run(&mut view, &task, vault.config.run.timeout_secs);
     Ok(Json(DetailOut::from(&view)).into_response())
 }
 
@@ -782,6 +801,47 @@ mod tests {
         // 002 depends on the completed 001, so it is ready with no blockers.
         assert!(second["blockers"].as_array().unwrap().is_empty());
         assert_eq!(second["ready"], true);
+    }
+
+    #[tokio::test]
+    async fn stale_running_marker_shows_as_not_running() {
+        // A running marker far in the past is a dead run: the read path blanks
+        // ai_status/ai_run_started for display (#048), while a fresh run stays.
+        let root = tempdir();
+        write_task(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: Ghost\nstatus: pending\ntags: [ai-runnable]\nai_status: running\nai_run_started: 2020-01-01T00:00:00Z\nai_attempts: 1\n---\n\n# Ghost\n",
+        );
+        // Default timeout (900s): the 2020 marker is stale.
+        let (_, list) = call(&root, get("/api/tasks")).await;
+        assert!(list["tasks"][0]["ai_status"].is_null());
+        assert!(list["tasks"][0]["ai_run_started"].is_null());
+        // Attempts are untouched (only the live-run markers are cleared).
+        assert_eq!(list["tasks"][0]["ai_attempts"], 1);
+        let (_, detail) = call(&root, get("/api/tasks/001")).await;
+        assert!(detail["ai_status"].is_null());
+    }
+
+    #[tokio::test]
+    async fn fresh_running_marker_is_preserved() {
+        // A huge timeout means even an old marker is not yet stale, so a genuine
+        // in-flight run still reads as running.
+        let root = tempdir();
+        fs::write(
+            root.join(".taskmd.yaml"),
+            "run:\n  enabled: true\n  timeout_secs: 100000000000\n",
+        )
+        .unwrap();
+        write_task(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: Live\nstatus: pending\ntags: [ai-runnable]\nai_status: running\nai_run_started: 2020-01-01T00:00:00Z\n---\n\n# Live\n",
+        );
+        let (_, list) = call(&root, get("/api/tasks")).await;
+        assert_eq!(list["tasks"][0]["ai_status"], "running");
+        let (_, detail) = call(&root, get("/api/tasks/001")).await;
+        assert_eq!(detail["ai_status"], "running");
     }
 
     #[tokio::test]

@@ -148,6 +148,40 @@ fn is_locked(task: &Task, cfg: &RunConfig, now: DateTime<Utc>) -> bool {
     running && !is_stale(started, now, cfg.timeout_secs)
 }
 
+/// True when a task shows `running` but its marker is stale (older than
+/// `2 * timeout`): a dead run (SIGKILL, reboot mid-run) that should be treated
+/// and rewritten as not-running (#048), never displayed as a live run.
+pub fn is_running_stale(task: &Task, timeout_secs: u64, now: DateTime<Utc>) -> bool {
+    task.get(K_STATUS).and_then(|v| v.as_str()) == Some(STATUS_RUNNING)
+        && is_stale(
+            task.get(K_STARTED).and_then(|v| v.as_str()),
+            now,
+            timeout_secs,
+        )
+}
+
+/// Clear stale `running` markers left by a run that never finished cleanly
+/// (#048): drop `ai_status`/`ai_run_started` so the file, API, and web reflect
+/// reality and the task is selectable again. `ai_attempts` is left intact — the
+/// cleanup is not a new attempt. Returns the ids rewritten.
+pub fn reconcile_stale(vault: &Vault, now: DateTime<Utc>) -> Result<Vec<String>> {
+    let timeout = vault.config.run.timeout_secs;
+    let scan = vault.scan()?;
+    let ids: Vec<String> = scan
+        .tasks
+        .iter()
+        .filter(|t| is_running_stale(t, timeout, now))
+        .map(Task::id)
+        .collect();
+    for id in &ids {
+        let mut t = vault.find(id)?;
+        t.remove(K_STATUS);
+        t.remove(K_STARTED);
+        vault.save(&t)?;
+    }
+    Ok(ids)
+}
+
 /// Selection predicate: eligible iff tagged runnable, not parked, not terminal,
 /// under the attempt cap, and not currently locked by a fresh run.
 pub fn is_runnable(task: &Task, cfg: &RunConfig, now: DateTime<Utc>) -> bool {
@@ -344,6 +378,9 @@ pub fn run_all(
         return Ok(report);
     }
     let log_dir = cfg.resolve_log_dir(&vault.root);
+    // Rewrite ghost `running` markers from crashed prior runs before selecting,
+    // so a dead run never lingers as "running" (#048).
+    reconcile_stale(vault, now)?;
     let scan = vault.scan()?;
     let ids: Vec<String> = scan
         .tasks
@@ -777,6 +814,62 @@ mod tests {
         let stale = "---\nid: \"002\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\nai_status: running\nai_run_started: 2026-07-01T00:00:00Z\n---\n";
         let (vault, _) = build_vault(CFG, &[("001-a.md", &fresh), ("002-b.md", stale)]);
         assert_eq!(plan(&vault, now()).unwrap(), vec!["002"]);
+    }
+
+    #[test]
+    fn is_running_stale_detects_dead_runs() {
+        let fresh = Task::parse_required(&format!(
+            "---\nid: \"1\"\ntitle: t\nai_status: running\nai_run_started: {}\n---\n",
+            now().to_rfc3339()
+        ))
+        .unwrap();
+        assert!(!is_running_stale(&fresh, 100, now()));
+        let stale = Task::parse_required(
+            "---\nid: \"1\"\ntitle: t\nai_status: running\nai_run_started: 2026-07-01T00:00:00Z\n---\n",
+        )
+        .unwrap();
+        assert!(is_running_stale(&stale, 100, now()));
+        // A non-running status is never a stale run, however old the timestamp.
+        let failed = Task::parse_required(
+            "---\nid: \"1\"\ntitle: t\nai_status: failed\nai_run_started: 2026-07-01T00:00:00Z\n---\n",
+        )
+        .unwrap();
+        assert!(!is_running_stale(&failed, 100, now()));
+    }
+
+    #[test]
+    fn reconcile_stale_clears_ghost_markers_keeping_attempts() {
+        let stale = "---\nid: \"001\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\nai_status: running\nai_run_started: 2026-07-01T00:00:00Z\nai_attempts: 2\n---\n";
+        let fresh = format!(
+            "---\nid: \"002\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\nai_status: running\nai_run_started: {}\n---\n",
+            now().to_rfc3339()
+        );
+        let (vault, _) = build_vault(CFG, &[("001-a.md", stale), ("002-b.md", &fresh)]);
+        assert_eq!(reconcile_stale(&vault, now()).unwrap(), vec!["001"]);
+        let t = reload(&vault, "001");
+        assert!(t.get("ai_status").is_none());
+        assert!(t.get("ai_run_started").is_none());
+        assert_eq!(read_attempts(&t), 2, "cleanup is not a new attempt");
+        // The genuinely fresh run is left running.
+        assert_eq!(
+            reload(&vault, "002")
+                .get("ai_status")
+                .and_then(|v| v.as_str()),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn run_all_reconciles_ghost_even_at_max_attempts() {
+        // Crashed at the attempt cap: not re-run, but its ghost marker is still
+        // cleared so it never shows as "running" again.
+        let stale = "---\nid: \"001\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\nai_status: running\nai_run_started: 2026-07-01T00:00:00Z\nai_attempts: 2\n---\n";
+        let (vault, _) = build_vault(CFG, &[("001-a.md", stale)]);
+        let runner = FakeRunner::new(Mode::SucceedNoComplete);
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        assert!(report.ran.is_empty());
+        assert!(runner.calls.borrow().is_empty());
+        assert!(reload(&vault, "001").get("ai_status").is_none());
     }
 
     // ---- orchestration ----
