@@ -441,17 +441,20 @@ async fn run_log(
 ) -> std::result::Result<Response, ApiError> {
     let vault = Vault::open(&state.root)?;
     let task = vault.find(&id)?;
-    let log = match task
+    let log_dir = vault.config.run.resolve_log_dir(&vault.root);
+    // Prefer the live run's file (derived from the running marker); once the run
+    // concludes and the marker is cleared, fall back to the last recorded run's
+    // log so a finished run's output is still viewable (#046).
+    let file = match task
         .ai_run_started()
         .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
     {
-        Some(dt) => {
-            let log_dir = vault.config.run.resolve_log_dir(&vault.root);
-            let file = crate::run::run_log_filename(dt.with_timezone(&Utc), &id);
-            crate::run::run_log_tail(&log_dir, &file, RUN_LOG_TAIL_BYTES)
-        }
-        None => String::new(),
+        Some(dt) => Some(crate::run::run_log_filename(dt.with_timezone(&Utc), &id)),
+        None => crate::run::latest_log_file(&log_dir, &id),
     };
+    let log = file
+        .map(|f| crate::run::run_log_tail(&log_dir, &f, RUN_LOG_TAIL_BYTES))
+        .unwrap_or_default();
     Ok(Json(RunLogOut { log }).into_response())
 }
 
@@ -461,7 +464,7 @@ async fn cancel_run(
     Path(id): Path<String>,
 ) -> std::result::Result<Response, ApiError> {
     let vault = Vault::open(&state.root)?;
-    let cancelled = crate::run::cancel_run(&vault, &id, Utc::now())?;
+    let cancelled = crate::run::cancel_run(&vault, &id)?;
     Ok(Json(CancelOut { cancelled }).into_response())
 }
 
