@@ -748,6 +748,17 @@ h3 {
   }
 }
 
+/* agent picker beside the "Run with…" button (#047) */
+.run-agent-select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--base1);
+  border-radius: 0.2rem;
+  background: var(--base3);
+  color: var(--base01);
+}
+
 /* the run-state block on the detail pane */
 .run-state {
   margin-bottom: 1.5rem;

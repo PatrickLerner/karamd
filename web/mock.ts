@@ -29,6 +29,8 @@ const config: Config = {
   today: ["mvp"],
   run_enabled: true,
   run_max_attempts: 3,
+  run_agents: ["claude", "opencode"],
+  run_default_agent: "claude",
   version: "0.0.0-mock",
 };
 

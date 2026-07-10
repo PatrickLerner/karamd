@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::taskmd::Vault;
-use crate::terminal::{Scrollback, parse_command, seed_prompt};
+use crate::terminal::{Scrollback, launch_argv, parse_command, seed_prompt};
 use crate::web::{ApiError, AppState};
 
 /// Control messages the client may send as text frames.
@@ -102,14 +102,14 @@ impl SessionRegistry {
         id: &str,
         title: &str,
         root: PathBuf,
-        run_command: String,
+        argv: Vec<String>,
         prompt: String,
     ) -> std::result::Result<Arc<Session>, String> {
         let mut map = self.sessions.lock().unwrap();
         if let Some(existing) = map.get(id) {
             return Ok(existing.clone());
         }
-        let session = spawn_session(title, root, run_command, prompt)?;
+        let session = spawn_session(title, root, argv, prompt)?;
         map.insert(id.to_string(), session.clone());
         Ok(session)
     }
@@ -165,10 +165,9 @@ impl Drop for SessionRegistry {
 fn spawn_session(
     title: &str,
     root: PathBuf,
-    run_command: String,
+    argv: Vec<String>,
     prompt: String,
 ) -> std::result::Result<Arc<Session>, String> {
-    let argv = parse_command(&run_command);
     if argv.is_empty() {
         return Err("run-command is empty".to_string());
     }
@@ -281,27 +280,59 @@ fn spawn_session(
     }))
 }
 
-/// GET /api/tasks/{id}/run (WebSocket). Resolves the task first so a bad id is a
-/// normal HTTP error; then upgrades and attaches to (or starts) its session.
+/// Query string for the run WebSocket: an optional configured agent name.
+#[derive(Deserialize)]
+pub(crate) struct RunParams {
+    agent: Option<String>,
+}
+
+/// GET /api/tasks/{id}/run?agent=<name> (WebSocket). Resolves the task and the
+/// launch argv first so a bad id or unknown agent is a normal HTTP error; then
+/// upgrades and attaches to (or starts) its session. The chosen agent's command
+/// (from `run.agents`, #047) drives the spawn; with no `agent` param it falls
+/// back to the `--run-command` for back-compat.
 pub(crate) async fn run_handler(
     ws: WebSocketUpgrade,
     Path(id): Path<String>,
+    Query(params): Query<RunParams>,
     State(state): State<AppState>,
 ) -> std::result::Result<Response, ApiError> {
     let vault = Vault::open(&state.root)?;
     let task = vault.find(&id)?;
     let title = task.title().to_string();
     let prompt = seed_prompt(&task);
+    let argv = resolve_launch_argv(&vault, params.agent.as_deref(), &state.run_command)?;
     let root = state.root.as_ref().clone();
-    let run_command = state.run_command.as_ref().clone();
     let sessions = state.sessions.clone();
     Ok(ws.on_upgrade(move |socket| async move {
         let mut socket = socket;
-        match sessions.get_or_create(&id, &title, root, run_command, prompt) {
+        match sessions.get_or_create(&id, &title, root, argv, prompt) {
             Ok(session) => attach(socket, session).await,
             Err(e) => close_with_error(&mut socket, &e).await,
         }
     }))
+}
+
+/// Resolve the terminal launch argv: a named `run.agents` entry (with prompt
+/// placeholders stripped, since the terminal is interactive) when `agent` is
+/// given, else the plain `--run-command`. An unknown agent name is a client
+/// error, never an arbitrary command.
+fn resolve_launch_argv(
+    vault: &Vault,
+    agent: Option<&str>,
+    run_command: &str,
+) -> std::result::Result<Vec<String>, ApiError> {
+    match agent {
+        Some(name) => {
+            let spec = vault.config.run.agents.get(name).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "unknown agent `{name}` (not configured in run.agents)"
+                ))
+            })?;
+            Ok(launch_argv(&spec.command))
+        }
+        None => Ok(parse_command(run_command)),
+    }
 }
 
 /// Stream one attached socket: replay scrollback, then relay live events and

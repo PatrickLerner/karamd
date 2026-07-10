@@ -91,6 +91,11 @@ export interface Config {
   // `run.max_attempts`: the denominator for the "n/max attempts" shown on
   // ai-runnable tasks (#044).
   run_max_attempts: number;
+  // Configured `run.agents` names the embedded terminal can launch (#047),
+  // sorted. Empty falls back to the default "Run with Claude" button.
+  run_agents: string[];
+  // `run.agent`: the default agent the terminal picker preselects (#047).
+  run_default_agent: string;
   // karamd's version, shown small and dim in the header.
   version: string;
 }

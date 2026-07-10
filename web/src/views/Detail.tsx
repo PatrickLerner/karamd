@@ -82,6 +82,9 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 export function Detail({ id, tab }: { id: string; tab: string }) {
   const queryClient = useQueryClient();
   const [dismissed, setDismissed] = useState(false);
+  // Which configured agent the "Run with…" control launches; null = the
+  // config default (#047).
+  const [pickedAgent, setPickedAgent] = useState<string | null>(null);
 
   const taskQ = useQuery({
     queryKey: ["task", id],
@@ -136,6 +139,17 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
       </div>
     );
   }
+
+  const runAgents = configQ.data?.run_agents ?? [];
+  const defaultAgent = configQ.data?.run_default_agent ?? "";
+  // The agent the run control targets: the explicit pick if still valid, else
+  // the config default when configured, else the first listed agent.
+  const selectedAgent =
+    pickedAgent && runAgents.includes(pickedAgent)
+      ? pickedAgent
+      : runAgents.includes(defaultAgent)
+        ? defaultAgent
+        : (runAgents[0] ?? null);
 
   const runnable = task.tags.includes(RUNNABLE_TAG);
   const parked = task.tags.includes(FAILED_TAG);
@@ -194,8 +208,22 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
         <a className="btn" href={editHref(tab, id)}>
           Edit
         </a>
-        <a className="btn" href={runHref(tab, id)}>
-          Run with Claude
+        {runAgents.length > 1 && (
+          <select
+            className="run-agent-select"
+            aria-label="AI tool to launch"
+            value={selectedAgent ?? ""}
+            onChange={(e) => setPickedAgent(e.target.value)}
+          >
+            {runAgents.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        )}
+        <a className="btn" href={runHref(tab, id, selectedAgent)}>
+          Run with {selectedAgent ?? "Claude"}
         </a>
         <button
           type="button"

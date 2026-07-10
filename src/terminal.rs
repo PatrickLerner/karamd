@@ -76,6 +76,19 @@ pub fn seed_prompt(task: &Task) -> String {
     prompt
 }
 
+/// Build the argv for an interactive terminal launch from a configured agent's
+/// command (#047). Unlike `karamd run`, the terminal is human-driven, so the
+/// prompt-delivery placeholder tokens (`{prompt}` / `{prompt_file}`) that the
+/// headless runner substitutes are dropped here; the caller seeds the task
+/// prompt as the final argument instead, matching the plain run-command path.
+pub fn launch_argv(command: &[String]) -> Vec<String> {
+    command
+        .iter()
+        .filter(|a| a.as_str() != "{prompt}" && a.as_str() != "{prompt_file}")
+        .cloned()
+        .collect()
+}
+
 /// Split a command string into argv with minimal shell-like quoting: whitespace
 /// separates tokens; single or double quotes group (and are stripped). A
 /// backslash inside is kept literally (no escape processing). Good enough for
@@ -144,6 +157,26 @@ mod tests {
         let p = seed_prompt(&t);
         assert_eq!(p, "Work on task 001: Quick");
         assert!(!p.contains("\n"));
+    }
+
+    #[test]
+    fn launch_argv_drops_prompt_placeholders() {
+        // The headless-style claude command loses its `{prompt}` token so the
+        // caller can seed the prompt as the final argument instead.
+        assert_eq!(
+            launch_argv(&["claude".into(), "-p".into(), "{prompt}".into()]),
+            vec!["claude", "-p"]
+        );
+        // A `{prompt_file}` token is dropped too.
+        assert_eq!(
+            launch_argv(&["tool".into(), "{prompt_file}".into(), "--x".into()]),
+            vec!["tool", "--x"]
+        );
+        // A command with no placeholder is unchanged (e.g. an opencode stdin agent).
+        assert_eq!(
+            launch_argv(&["opencode".into(), "run".into()]),
+            vec!["opencode", "run"]
+        );
     }
 
     #[test]

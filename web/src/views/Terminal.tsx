@@ -31,9 +31,10 @@ const solarizedDark: ITheme = {
   brightWhite: "#fdf6e3",
 };
 
-function socketUrl(id: string): string {
+function socketUrl(id: string, agent: string | null): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/api/tasks/${encodeURIComponent(id)}/run`;
+  const q = agent ? `?agent=${encodeURIComponent(agent)}` : "";
+  return `${proto}//${location.host}/api/tasks/${encodeURIComponent(id)}/run${q}`;
 }
 
 interface ExitFrame {
@@ -61,7 +62,15 @@ function parseExit(text: string): ExitFrame | null {
   return null;
 }
 
-export function Terminal({ id, tab }: { id: string; tab: string }) {
+export function Terminal({
+  id,
+  tab,
+  agent,
+}: {
+  id: string;
+  tab: string;
+  agent: string | null;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<ConnState>("connecting");
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +110,7 @@ export function Terminal({ id, tab }: { id: string; tab: string }) {
 
     let exited = false;
     let opened = false;
-    const socket = new WebSocket(socketUrl(id));
+    const socket = new WebSocket(socketUrl(id, agent));
     socket.binaryType = "arraybuffer";
     const encoder = new TextEncoder();
 
@@ -172,7 +181,7 @@ export function Terminal({ id, tab }: { id: string; tab: string }) {
       }
       term.dispose();
     };
-  }, [id]);
+  }, [id, agent]);
 
   const statusLabel: Record<ConnState, string> = {
     connecting: "connecting…",

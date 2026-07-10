@@ -46,7 +46,14 @@ function paneFor(pane: Pane, tab: string): ReactNode {
     case "edit":
       return <TaskForm key={`edit-${pane.id}`} id={pane.id} tab={tab} />;
     case "run":
-      return <Terminal key={pane.id} id={pane.id} tab={tab} />;
+      return (
+        <Terminal
+          key={`${pane.id}-${pane.agent ?? ""}`}
+          id={pane.id}
+          tab={tab}
+          agent={pane.agent}
+        />
+      );
     case "new":
       return <TaskForm key="new" tab={tab} />;
     case "rules":
@@ -90,6 +97,8 @@ function App() {
     today: DEFAULT_TODAY_PHASES,
     run_enabled: false,
     run_max_attempts: 0,
+    run_agents: [],
+    run_default_agent: "",
     version: "",
   };
   const tasks: TaskSummary[] | null = tasksQ.data?.tasks ?? null;

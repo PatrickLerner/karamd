@@ -55,6 +55,17 @@ pub(crate) struct ApiError {
     message: String,
 }
 
+impl ApiError {
+    /// A 400 with an explicit message (used by [`crate::web_terminal`] for an
+    /// unknown agent name).
+    pub(crate) fn bad_request(message: impl Into<String>) -> ApiError {
+        ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct ErrorBody {
     error: String,
@@ -199,6 +210,12 @@ struct ConfigOut {
     /// `run.max_attempts` (#044): the denominator for the "n/max attempts" the
     /// web shows on ai-runnable tasks, so a parked task is obvious at a glance.
     run_max_attempts: u32,
+    /// Configured `run.agents` names (#047): the launchable tools the embedded
+    /// terminal can start. Empty falls the frontend back to the default
+    /// "Run with Claude" button (the `--run-command`).
+    run_agents: Vec<String>,
+    /// `run.agent` (#047): the default agent the terminal picker preselects.
+    run_default_agent: String,
     /// karamd's own version (from `CARGO_PKG_VERSION`), shown in the web header.
     version: String,
 }
@@ -392,6 +409,8 @@ async fn get_config(State(state): State<AppState>) -> std::result::Result<Respon
         today,
         run_enabled: vault.config.run.enabled,
         run_max_attempts: vault.config.run.max_attempts,
+        run_agents: vault.config.run.agents.keys().cloned().collect(),
+        run_default_agent: vault.config.run.agent.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
     .into_response())
@@ -889,7 +908,7 @@ mod tests {
         let root = tempdir();
         fs::write(
             root.join(".taskmd.yaml"),
-            "workflow: pr-review\nrun:\n  enabled: true\n  max_attempts: 5\nphases:\n  - id: v1\n    name: One\n  - name: Two\nweb:\n  today:\n    - v1\n",
+            "workflow: pr-review\nrun:\n  enabled: true\n  max_attempts: 5\n  agent: opencode\n  agents:\n    claude:\n      command: [claude]\n    opencode:\n      command: [opencode, run]\nphases:\n  - id: v1\n    name: One\n  - name: Two\nweb:\n  today:\n    - v1\n",
         )
         .unwrap();
         let (status, body) = call(&root, get("/api/config")).await;
@@ -897,6 +916,10 @@ mod tests {
         assert_eq!(body["workflow"], "pr-review");
         assert_eq!(body["run_enabled"], true);
         assert_eq!(body["run_max_attempts"], 5);
+        // Launchable agents (#047): names, sorted, plus the default selection.
+        assert_eq!(body["run_agents"][0], "claude");
+        assert_eq!(body["run_agents"][1], "opencode");
+        assert_eq!(body["run_default_agent"], "opencode");
         assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(body["phases"][0]["id"], "v1");
         assert_eq!(body["phases"][1]["name"], "Two");
@@ -914,6 +937,9 @@ mod tests {
         assert!(body["phases"].as_array().unwrap().is_empty());
         // No config: run defaults off, so the web toggle annotates itself.
         assert_eq!(body["run_enabled"], false);
+        // No agents configured: the picker falls back to the default button.
+        assert!(body["run_agents"].as_array().unwrap().is_empty());
+        assert_eq!(body["run_default_agent"], "claude");
         // No config: Today falls back to the built-in default.
         assert_eq!(body["today"][0], "ongoing");
         assert_eq!(body["today"][1], "now");
@@ -1066,6 +1092,15 @@ mod tests {
         assert_eq!(res.headers().get(CACHE_CONTROL).unwrap(), CACHE_NO_STORE);
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("hello spa"));
+    }
+
+    #[test]
+    fn api_error_bad_request_is_400() {
+        // Used by web_terminal (excluded from coverage) for an unknown agent;
+        // exercised here so the constructor stays covered.
+        let e = ApiError::bad_request("nope");
+        assert_eq!(e.status, StatusCode::BAD_REQUEST);
+        assert_eq!(e.message, "nope");
     }
 
     #[test]
