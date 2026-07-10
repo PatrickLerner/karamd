@@ -167,6 +167,10 @@ pub struct RunConfig {
     /// value bounds a pathological rule/agent that keeps spawning new runnable
     /// tasks. Remaining runnable tasks are deferred to the next invocation.
     pub max_per_invocation: usize,
+    /// How many agents may run at once (#042). Default 1 = strictly sequential
+    /// (unchanged behaviour). Tasks sharing a resolved working dir never run
+    /// concurrently regardless of this value.
+    pub concurrency: usize,
 }
 
 impl RunConfig {
@@ -200,6 +204,7 @@ impl Default for RunConfig {
             log_dir: None,
             log_retention: 1000,
             max_per_invocation: 500,
+            concurrency: 1,
         }
     }
 }
@@ -454,6 +459,7 @@ scopes:
         assert_eq!(c.run.log_dir, None);
         assert_eq!(c.run.log_retention, 1000);
         assert_eq!(c.run.max_per_invocation, 500);
+        assert_eq!(c.run.concurrency, 1);
         assert_eq!(
             c.run.resolve_log_dir(Path::new("/v")),
             PathBuf::from("/v/.karamd/runs")
@@ -465,11 +471,12 @@ scopes:
 
     #[test]
     fn run_config_parses_log_knobs() {
-        let raw = "run:\n  enabled: true\n  log_dir: /var/log/karamd\n  log_retention: 50\n  max_per_invocation: 3\n";
+        let raw = "run:\n  enabled: true\n  log_dir: /var/log/karamd\n  log_retention: 50\n  max_per_invocation: 3\n  concurrency: 4\n";
         let c: Config = serde_norway::from_str(raw).unwrap();
         assert_eq!(c.run.log_dir.as_deref(), Some("/var/log/karamd"));
         assert_eq!(c.run.log_retention, 50);
         assert_eq!(c.run.max_per_invocation, 3);
+        assert_eq!(c.run.concurrency, 4);
         // An absolute dir wins over the vault-relative default.
         assert_eq!(
             c.run.resolve_log_dir(Path::new("/v")),

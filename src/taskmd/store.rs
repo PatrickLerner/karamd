@@ -301,7 +301,12 @@ impl Vault {
             .context("task has no file path; use create for new tasks")?;
         let path = self.tasks_dir().join(rel);
         let dir = path.parent().context("task path has no parent")?;
-        let tmp = dir.join(format!(".karamd-tmp-{}", std::process::id()));
+        // Unique per save: pid guards against another karamd process, and a
+        // per-call counter guards against concurrent saves within this process
+        // (#042 runs several agents/tasks at once) sharing one temp path.
+        static SAVE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SAVE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = dir.join(format!(".karamd-tmp-{}-{seq}", std::process::id()));
         fs::write(&tmp, task.to_markdown())
             .with_context(|| format!("writing {}", tmp.display()))?;
         fs::rename(&tmp, &path).with_context(|| format!("renaming into {}", path.display()))?;

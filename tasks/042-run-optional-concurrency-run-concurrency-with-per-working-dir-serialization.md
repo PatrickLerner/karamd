@@ -1,7 +1,7 @@
 ---
 id: '042'
 title: 'run: optional concurrency (run.concurrency) with per-working-dir serialization'
-status: pending
+status: completed
 created_at: 2026-07-09
 priority: low
 type: improvement
@@ -10,6 +10,7 @@ tags:
 - concurrency
 dependencies:
 - '039'
+completed_at: 2026-07-10
 ---
 
 ## Description

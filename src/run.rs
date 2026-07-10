@@ -349,9 +349,12 @@ pub fn prune_logs(log_dir: &Path, keep: usize) -> Result<()> {
         .filter_map(|l| serde_json::from_str::<RunRecord>(l).ok())
         .map(|r| r.log_file)
         .collect();
-    // Rewrite the index to the kept lines. A per-process temp name avoids two
-    // concurrent runs clobbering a shared temp path.
-    let tmp = log_dir.join(format!("runs.jsonl.{}.tmp", std::process::id()));
+    // Rewrite the index to the kept lines. A pid + per-call counter temp name
+    // avoids two concurrent prunes (another process, or another #042 batch
+    // thread in this one) clobbering a shared temp path.
+    static PRUNE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = PRUNE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = log_dir.join(format!("runs.jsonl.{}-{seq}.tmp", std::process::id()));
     std::fs::write(&tmp, format!("{}\n", kept.join("\n")))?;
     std::fs::rename(&tmp, &index)?;
     // Delete only the dropped records' own log files (skipping unparseable
@@ -381,6 +384,53 @@ pub fn plan(vault: &Vault, now: DateTime<Utc>) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Choose up to `n` ids to run concurrently this round, at most one per resolved
+/// working dir (#042): tasks sharing a working dir would clobber the same repo,
+/// so only the first candidate for each dir joins the batch; the rest wait for a
+/// later round (after the first frees the dir). `candidates` is in scan order.
+pub fn pick_batch(candidates: &[(String, PathBuf)], n: usize) -> Vec<String> {
+    let mut seen_dirs: std::collections::HashSet<&PathBuf> = std::collections::HashSet::new();
+    let mut batch = Vec::new();
+    for (id, dir) in candidates {
+        if batch.len() >= n {
+            break;
+        }
+        if seen_dirs.insert(dir) {
+            batch.push(id.clone());
+        }
+    }
+    batch
+}
+
+/// Run a batch of tasks (distinct working dirs, so safe to parallelise). A
+/// single-task batch runs inline; a larger one fans out over a scoped thread per
+/// task. Every task's writes go to its own file, so the only shared sink is the
+/// per-run log index, whose append is atomic.
+fn run_batch(
+    vault: &Vault,
+    cfg: &RunConfig,
+    log_dir: &Path,
+    runner: &(dyn AgentRunner + Sync),
+    ids: &[String],
+    now: DateTime<Utc>,
+    today: NaiveDate,
+) -> Result<Vec<RunResult>> {
+    if ids.len() == 1 {
+        let r = run_one(vault, cfg, log_dir, runner, &ids[0], now, today)?;
+        return Ok(vec![r]);
+    }
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = ids
+            .iter()
+            .map(|id| scope.spawn(move || run_one(vault, cfg, log_dir, runner, id, now, today)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("run_one thread panicked"))
+            .collect()
+    })
+}
+
 /// Run a single task end to end: mark running (pre-increment attempts), render
 /// the prompt from the staged task, spawn via `runner`, re-read the (possibly
 /// agent-modified) task, record success (exit 0 *and* the agent moved the task
@@ -391,7 +441,7 @@ fn run_one(
     vault: &Vault,
     cfg: &RunConfig,
     log_dir: &Path,
-    runner: &dyn AgentRunner,
+    runner: &(dyn AgentRunner + Sync),
     id: &str,
     now: DateTime<Utc>,
     today: NaiveDate,
@@ -514,7 +564,7 @@ fn run_one(
 /// recorded in the order tasks were run.
 pub fn run_all(
     vault: &Vault,
-    runner: &dyn AgentRunner,
+    runner: &(dyn AgentRunner + Sync),
     now: DateTime<Utc>,
     today: NaiveDate,
 ) -> Result<RunReport> {
@@ -533,6 +583,7 @@ pub fn run_all(
     reconcile_stale(vault, now)?;
 
     let cap = cfg.max_per_invocation;
+    let concurrency = cfg.concurrency.max(1);
     let mut done: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         if cap != 0 && report.ran.len() >= cap {
@@ -549,21 +600,35 @@ pub fn run_all(
             }
             break;
         }
-        // Re-scan every iteration so a task that became runnable during the
-        // previous one is picked up; skip anything already run this invocation.
+        // Re-scan every round (#049) so tasks that became runnable during the
+        // previous round are picked up; skip anything already run this run.
         let scan = vault.scan()?;
-        let next = scan
+        let candidates: Vec<(String, PathBuf)> = scan
             .tasks
             .iter()
-            .filter(|t| is_runnable(t, cfg, now))
-            .map(Task::id)
-            .find(|id| !done.contains(id));
-        let Some(id) = next else { break };
-        done.insert(id.clone());
+            .filter(|t| is_runnable(t, cfg, now) && !done.contains(&t.id()))
+            .map(|t| (t.id(), resolve_working_dir(t, cfg, &vault.root)))
+            .collect();
+        // Up to `concurrency` distinct-working-dir tasks per round (#042), never
+        // exceeding the remaining `max_per_invocation` budget (#049).
+        let budget = if cap == 0 {
+            concurrency
+        } else {
+            concurrency.min(cap - report.ran.len())
+        };
+        let batch = pick_batch(&candidates, budget);
+        if batch.is_empty() {
+            break;
+        }
+        for id in &batch {
+            done.insert(id.clone());
+        }
         report
             .ran
-            .push(run_one(vault, cfg, &log_dir, runner, &id, now, today)?);
+            .extend(run_batch(vault, cfg, &log_dir, runner, &batch, now, today)?);
     }
+    // Deterministic output regardless of concurrent completion order (#042).
+    report.ran.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(report)
 }
 
@@ -571,9 +636,9 @@ pub fn run_all(
 mod tests {
     use super::*;
     use crate::taskmd::Status;
-    use std::cell::RefCell;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn now() -> DateTime<Utc> {
@@ -629,14 +694,16 @@ mod tests {
 
     struct FakeRunner {
         mode: Mode,
-        calls: RefCell<Vec<Recorded>>,
+        // Mutex (not RefCell) so the runner is Sync and can be shared across the
+        // scoped threads a concurrent batch (#042) uses.
+        calls: Mutex<Vec<Recorded>>,
     }
 
     impl FakeRunner {
         fn new(mode: Mode) -> FakeRunner {
             FakeRunner {
                 mode,
-                calls: RefCell::new(Vec::new()),
+                calls: Mutex::new(Vec::new()),
             }
         }
     }
@@ -650,7 +717,7 @@ mod tests {
             timeout_secs: u64,
             log_path: Option<&Path>,
         ) -> AgentOutcome {
-            self.calls.borrow_mut().push(Recorded {
+            self.calls.lock().unwrap().push(Recorded {
                 command: spec.command.clone(),
                 prompt: prompt.to_string(),
                 working_dir: working_dir.to_path_buf(),
@@ -843,7 +910,7 @@ mod tests {
                 .ran
                 .is_empty()
         );
-        assert!(runner.calls.borrow().is_empty());
+        assert!(runner.calls.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -938,7 +1005,7 @@ mod tests {
         let runner = FakeRunner::new(Mode::SucceedNoComplete);
         let report = run_all(&vault, &runner, now(), today()).unwrap();
         assert!(report.ran.is_empty());
-        assert!(runner.calls.borrow().is_empty());
+        assert!(runner.calls.lock().unwrap().is_empty());
         assert!(reload(&vault, "001").get("ai_status").is_none());
     }
 
@@ -959,7 +1026,7 @@ mod tests {
         assert!(t.get("ai_status").is_none());
         assert!(t.get("ai_attempts").is_none());
         // The runner saw a substituted prompt and the default working dir (vault root).
-        let calls = runner.calls.borrow();
+        let calls = runner.calls.lock().unwrap();
         assert_eq!(calls[0].command, vec!["claude", "-p", "{prompt}"]);
         assert!(calls[0].prompt.contains("do 001: Fetch 001"));
         assert!(calls[0].prompt.contains("path="));
@@ -1005,7 +1072,7 @@ mod tests {
         let report = run_all(&vault, &runner, now(), today()).unwrap();
         assert!(report.ran[0].detail.contains("unknown agent `ghost`"));
         // Runner was never called for an unresolvable agent.
-        assert!(runner.calls.borrow().is_empty());
+        assert!(runner.calls.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1048,7 +1115,7 @@ mod tests {
         let runner = FakeRunner::new(Mode::Fail("x".into()));
         run_all(&vault, &runner, now(), today()).unwrap();
         assert_eq!(
-            runner.calls.borrow()[0].working_dir,
+            runner.calls.lock().unwrap()[0].working_dir,
             PathBuf::from("/custom/repo")
         );
     }
@@ -1092,7 +1159,7 @@ mod tests {
         let runner = FakeRunner::new(Mode::Complete(path));
         run_all(&vault, &runner, now(), today()).unwrap();
         // The runner was handed a log path to tee into.
-        assert!(runner.calls.borrow()[0].log_path.is_some());
+        assert!(runner.calls.lock().unwrap()[0].log_path.is_some());
         let log_dir = dir.join(".karamd/runs");
         let recs = read_records(&log_dir);
         assert_eq!(recs.len(), 1);
@@ -1263,7 +1330,7 @@ mod tests {
     /// (so each stays runnable but is guarded by the once-per-invocation set).
     struct SpawningRunner {
         tasks_dir: PathBuf,
-        calls: RefCell<u32>,
+        calls: Mutex<u32>,
     }
 
     impl AgentRunner for SpawningRunner {
@@ -1275,7 +1342,7 @@ mod tests {
             _timeout_secs: u64,
             _log_path: Option<&Path>,
         ) -> AgentOutcome {
-            let mut n = self.calls.borrow_mut();
+            let mut n = self.calls.lock().unwrap();
             if *n == 0 {
                 fs::write(self.tasks_dir.join("002-b.md"), runnable_task("002")).unwrap();
             }
@@ -1292,7 +1359,7 @@ mod tests {
         let (vault, dir) = build_vault(CFG, &[("001-a.md", &runnable_task("001"))]);
         let runner = SpawningRunner {
             tasks_dir: dir.join("tasks"),
-            calls: RefCell::new(0),
+            calls: Mutex::new(0),
         };
         let report = run_all(&vault, &runner, now(), today()).unwrap();
         let ran: Vec<&str> = report.ran.iter().map(|r| r.id.as_str()).collect();
@@ -1300,7 +1367,7 @@ mod tests {
         assert_eq!(ran, vec!["001", "002"]);
         // Each ran exactly once: a failed-but-under-cap task is NOT retried
         // immediately (it is deferred to the next invocation).
-        assert_eq!(*runner.calls.borrow(), 2);
+        assert_eq!(*runner.calls.lock().unwrap(), 2);
     }
 
     #[test]
@@ -1317,6 +1384,88 @@ mod tests {
         let report = run_all(&vault, &runner, now(), today()).unwrap();
         // The cap stops after one task even though two were runnable.
         assert_eq!(report.ran.len(), 1);
-        assert_eq!(runner.calls.borrow().len(), 1);
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    }
+
+    // ---- concurrency (#042) ----
+
+    #[test]
+    fn pick_batch_one_per_dir_up_to_n() {
+        let c = vec![
+            ("001".to_string(), PathBuf::from("/a")),
+            ("002".to_string(), PathBuf::from("/a")), // same dir as 001
+            ("003".to_string(), PathBuf::from("/b")),
+            ("004".to_string(), PathBuf::from("/c")),
+        ];
+        // n=3: 002 is skipped (its dir is already taken by 001).
+        assert_eq!(pick_batch(&c, 3), vec!["001", "003", "004"]);
+        // n=1: just the first candidate.
+        assert_eq!(pick_batch(&c, 1), vec!["001"]);
+        // n=0 and no candidates both yield an empty batch.
+        assert!(pick_batch(&c, 0).is_empty());
+        assert!(pick_batch(&[], 5).is_empty());
+    }
+
+    fn dir_task(id: &str, dir: &str) -> String {
+        format!(
+            "---\nid: \"{id}\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\nai_working_dir: {dir}\n---\n"
+        )
+    }
+
+    #[test]
+    fn run_all_runs_distinct_working_dirs_concurrently() {
+        // concurrency 2 + two distinct dirs = one concurrent batch (the threaded
+        // run_batch path). Output is sorted by id regardless of finish order.
+        let cfg = "run:\n  enabled: true\n  agent: claude\n  max_attempts: 2\n  concurrency: 2\n  agents:\n    claude:\n      command: [claude]\n";
+        let (vault, _) = build_vault(
+            cfg,
+            &[
+                ("001-a.md", &dir_task("001", "/tmp/karamd-ta")),
+                ("002-b.md", &dir_task("002", "/tmp/karamd-tb")),
+            ],
+        );
+        let runner = FakeRunner::new(Mode::SucceedNoComplete);
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        let ran: Vec<&str> = report.ran.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ran, vec!["001", "002"]);
+        assert_eq!(runner.calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn run_all_unlimited_cap_drains_all() {
+        // max_per_invocation: 0 = no cap; the loop never breaks on the cap and
+        // the per-round budget is just `concurrency`.
+        let cfg = "run:\n  enabled: true\n  agent: claude\n  max_attempts: 2\n  max_per_invocation: 0\n  agents:\n    claude:\n      command: [claude]\n";
+        let (vault, _) = build_vault(
+            cfg,
+            &[
+                ("001-a.md", &runnable_task("001")),
+                ("002-b.md", &runnable_task("002")),
+            ],
+        );
+        let runner = FakeRunner::new(Mode::SucceedNoComplete);
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        assert_eq!(report.ran.len(), 2);
+    }
+
+    #[test]
+    fn run_all_serializes_shared_working_dir() {
+        // Both tasks resolve to the vault root (no override), so even at
+        // concurrency 2 they run one-per-round, never in the same batch.
+        let cfg = "run:\n  enabled: true\n  agent: claude\n  max_attempts: 2\n  concurrency: 2\n  agents:\n    claude:\n      command: [claude]\n";
+        let (vault, _) = build_vault(
+            cfg,
+            &[
+                ("001-a.md", &runnable_task("001")),
+                ("002-b.md", &runnable_task("002")),
+            ],
+        );
+        let runner = FakeRunner::new(Mode::SucceedNoComplete);
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        assert_eq!(
+            report.ran.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["001", "002"]
+        );
+        assert_eq!(runner.calls.lock().unwrap().len(), 2);
     }
 }
