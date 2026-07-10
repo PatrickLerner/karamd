@@ -12,8 +12,9 @@ import { editHref, runHref, taskHref } from "../router";
 import type { Status, TaskDetail as Task, Workflow } from "../types";
 
 // The tag `karamd run` selects on: carrying it marks a task AI-executable.
-// Keep in sync with `RUNNABLE_TAG` in src/run.rs.
+// Keep in sync with `RUNNABLE_TAG` / `FAILED_TAG` in src/run.rs.
 const RUNNABLE_TAG = "ai-runnable";
+const FAILED_TAG = "ai-failed";
 
 interface Transition {
   label: string;
@@ -137,7 +138,12 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
   }
 
   const runnable = task.tags.includes(RUNNABLE_TAG);
+  const parked = task.tags.includes(FAILED_TAG);
   const runEnabled = configQ.data?.run_enabled ?? false;
+  const runMaxAttempts = configQ.data?.run_max_attempts ?? 0;
+  // Show the run-state block whenever the task carries any `karamd run` marker.
+  const hasRunState =
+    task.ai_status !== null || task.ai_attempts !== null || parked;
   const toggleRunnable = () =>
     tagMutation.mutate(
       runnable
@@ -208,6 +214,29 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
           vault. Set <code>run.enabled: true</code> for <code>karamd run</code>{" "}
           to pick it up.
         </p>
+      )}
+      {hasRunState && (
+        <div className="run-state">
+          <h2>AI run state</h2>
+          <dl className="frontmatter">
+            <Field label="status">
+              {task.ai_status ?? (parked ? "parked" : null)}
+            </Field>
+            <Field label="attempts">
+              {task.ai_attempts !== null
+                ? `${task.ai_attempts} / ${runMaxAttempts}${
+                    parked ? " (parked)" : ""
+                  }`
+                : null}
+            </Field>
+            <Field label="started">{task.ai_run_started}</Field>
+            <Field label="last error">
+              {task.ai_last_error ? (
+                <code className="run-error">{task.ai_last_error}</code>
+              ) : null}
+            </Field>
+          </dl>
+        </div>
       )}
       <dl className="frontmatter">
         <Field label="effort">{task.effort}</Field>

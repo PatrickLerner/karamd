@@ -1,17 +1,28 @@
 import { useMemo, useState } from "react";
 import { ErrorBanner } from "../components/Banner";
-import { PriorityChip, StatusChip } from "../components/Chip";
+import { PriorityChip, RunChip, StatusChip } from "../components/Chip";
 import { stripWikiLinks } from "../markdown";
 import { taskHref } from "../router";
 import { DONE_TAB, tabSlug, taskInTab } from "../tabs";
 import type { InvalidTask, Phase, TaskSummary } from "../types";
+
+// Keep in sync with `FAILED_TAG` in src/run.rs.
+const FAILED_TAG = "ai-failed";
 
 interface Group {
   name: string;
   tasks: TaskSummary[];
 }
 
-function TaskRow({ task, tab }: { task: TaskSummary; tab: string }) {
+function TaskRow({
+  task,
+  tab,
+  runMaxAttempts,
+}: {
+  task: TaskSummary;
+  tab: string;
+  runMaxAttempts: number;
+}) {
   return (
     <a className="task-row" href={taskHref(tab, task.id)}>
       <span className="task-id">{task.id}</span>
@@ -25,6 +36,12 @@ function TaskRow({ task, tab }: { task: TaskSummary; tab: string }) {
         )}
       </span>
       <span className="task-chips">
+        <RunChip
+          status={task.ai_status}
+          attempts={task.ai_attempts}
+          maxAttempts={runMaxAttempts}
+          parked={task.tags.includes(FAILED_TAG)}
+        />
         <StatusChip status={task.status} />
         <PriorityChip priority={task.priority} />
       </span>
@@ -41,6 +58,7 @@ export function List({
   activeTab,
   tabName,
   newLink,
+  runMaxAttempts,
   error,
   onDismissError,
 }: {
@@ -52,6 +70,7 @@ export function List({
   activeTab: string | null;
   tabName: string;
   newLink: string;
+  runMaxAttempts: number;
   error: string | null;
   onDismissError: () => void;
 }) {
@@ -148,6 +167,7 @@ export function List({
                 key={t.id}
                 task={t}
                 tab={activeTab ? tabSlug(activeTab) : ""}
+                runMaxAttempts={runMaxAttempts}
               />
             ))}
           </div>

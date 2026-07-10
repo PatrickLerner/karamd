@@ -721,6 +721,56 @@ h3 {
   font-size: 0.85rem;
 }
 
+/* ---- karamd run execution state (#044) ---- */
+
+/* run chip on the list rows: a pulsing dot for an in-flight run */
+.run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.run-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: #fff;
+  animation: run-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes run-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* the run-state block on the detail pane */
+.run-state {
+  margin-bottom: 1.5rem;
+}
+
+.run-state h2 {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--base1);
+  margin: 0 0 0.4rem;
+}
+
+.run-state .frontmatter {
+  margin-bottom: 0;
+}
+
+.run-error {
+  color: var(--red);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .frontmatter {
   display: grid;
   grid-template-columns: max-content 1fr;

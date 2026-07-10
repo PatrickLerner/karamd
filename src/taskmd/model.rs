@@ -430,6 +430,31 @@ impl Task {
         self.get_str("recurring")
     }
 
+    /// `karamd run` execution state (`ai_status`): `running` or `failed`,
+    /// cleared on success. karamd-specific (like [`Task::recurring`]).
+    pub fn ai_status(&self) -> Option<String> {
+        self.get_str("ai_status")
+    }
+
+    /// How many times `karamd run` has attempted this task (`ai_attempts`),
+    /// tolerating a hand-edited string value like the run loop does.
+    pub fn ai_attempts(&self) -> Option<u32> {
+        let v = self.get("ai_attempts")?;
+        v.as_u64()
+            .map(|n| n as u32)
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    }
+
+    /// RFC3339 timestamp of the in-flight run (`ai_run_started`).
+    pub fn ai_run_started(&self) -> Option<String> {
+        self.get_str("ai_run_started")
+    }
+
+    /// Last recorded failure detail from `karamd run` (`ai_last_error`).
+    pub fn ai_last_error(&self) -> Option<String> {
+        self.get_str("ai_last_error")
+    }
+
     /// `created_at`, accepting the deprecated `created` alias.
     pub fn created_at(&self) -> Option<NaiveDate> {
         self.get("created_at")
@@ -669,6 +694,33 @@ Body text.
         assert_eq!(t.created_at(), Some(day(2026, 2, 8)));
         assert_eq!(t.recurring().as_deref(), Some("checkin"));
         assert!(t.body.contains("# Implement User Authentication"));
+    }
+
+    #[test]
+    fn ai_run_markers_read_back() {
+        // ai_attempts as a number.
+        let t = Task::parse_required(
+            "---\nid: \"1\"\ntitle: t\nai_status: running\nai_attempts: 2\nai_run_started: 2026-07-09T12:00:00Z\nai_last_error: boom\n---\n",
+        )
+        .unwrap();
+        assert_eq!(t.ai_status().as_deref(), Some("running"));
+        assert_eq!(t.ai_attempts(), Some(2));
+        assert_eq!(t.ai_run_started().as_deref(), Some("2026-07-09T12:00:00Z"));
+        assert_eq!(t.ai_last_error().as_deref(), Some("boom"));
+        // ai_attempts hand-edited to a string still parses.
+        let s =
+            Task::parse_required("---\nid: \"1\"\ntitle: t\nai_attempts: \"3\"\n---\n").unwrap();
+        assert_eq!(s.ai_attempts(), Some(3));
+        // A non-numeric ai_attempts reads as absent, not a panic.
+        let bad =
+            Task::parse_required("---\nid: \"1\"\ntitle: t\nai_attempts: [x]\n---\n").unwrap();
+        assert_eq!(bad.ai_attempts(), None);
+        // Absent markers are all None.
+        let plain = Task::parse_required("---\nid: \"1\"\ntitle: t\n---\n").unwrap();
+        assert_eq!(plain.ai_status(), None);
+        assert_eq!(plain.ai_attempts(), None);
+        assert_eq!(plain.ai_run_started(), None);
+        assert_eq!(plain.ai_last_error(), None);
     }
 
     #[test]

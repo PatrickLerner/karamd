@@ -89,6 +89,7 @@ function App() {
     workflow: "solo",
     today: DEFAULT_TODAY_PHASES,
     run_enabled: false,
+    run_max_attempts: 0,
     version: "",
   };
   const tasks: TaskSummary[] | null = tasksQ.data?.tasks ?? null;
@@ -182,6 +183,7 @@ function App() {
               activeTab={activeTab}
               tabName={tabName}
               newLink={newHref(tabForLinks)}
+              runMaxAttempts={config.run_max_attempts}
               error={error}
               onDismissError={() => setError(null)}
             />

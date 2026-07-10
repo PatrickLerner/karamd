@@ -60,6 +60,16 @@ pub struct TaskView {
     pub cancelled_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recurring: Option<String>,
+    /// `karamd run` execution state (#044): the frontmatter markers `run` writes.
+    /// All skip-if-none, so an idle/never-run task carries none of them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_attempts: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_run_started: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     /// All dependencies `completed` (from the graph).
@@ -100,6 +110,10 @@ impl TaskView {
             completed_at: date(task.completed_at()),
             cancelled_at: date(task.cancelled_at()),
             recurring: task.recurring(),
+            ai_status: task.ai_status(),
+            ai_attempts: task.ai_attempts(),
+            ai_run_started: task.ai_run_started(),
+            ai_last_error: task.ai_last_error(),
             file: task
                 .rel_path
                 .as_ref()
@@ -284,6 +298,32 @@ mod tests {
         assert_eq!(v.recurring.as_deref(), Some("k"));
         assert_eq!(v.file.as_deref(), Some("009-full.md"));
         let _ = NaiveDate::from_ymd_opt(2026, 1, 1); // keep chrono import honest
+    }
+
+    #[test]
+    fn run_state_markers_surface_and_omit() {
+        // A running task exposes every ai_* marker; a plain task omits them all.
+        let running = vec![task(
+            "id: \"001\"\ntitle: T\ntags: [ai-runnable]\nai_status: running\nai_attempts: 2\nai_run_started: 2026-07-09T12:00:00Z\nai_last_error: boom",
+        )];
+        let graph = Graph::build(&running);
+        let v = TaskView::build(&running[0], &graph, false);
+        assert_eq!(v.ai_status.as_deref(), Some("running"));
+        assert_eq!(v.ai_attempts, Some(2));
+        assert_eq!(v.ai_run_started.as_deref(), Some("2026-07-09T12:00:00Z"));
+        assert_eq!(v.ai_last_error.as_deref(), Some("boom"));
+        let json = to_json(&vec![v]).unwrap();
+        assert!(json.contains("\"ai_status\": \"running\""));
+        assert!(json.contains("\"ai_attempts\": 2"));
+
+        let plain = vec![task("id: \"002\"\ntitle: T")];
+        let graph = Graph::build(&plain);
+        let v = TaskView::build(&plain[0], &graph, false);
+        assert_eq!(v.ai_status, None);
+        assert_eq!(v.ai_attempts, None);
+        let json = to_json(&vec![v]).unwrap();
+        assert!(!json.contains("ai_status"));
+        assert!(!json.contains("ai_attempts"));
     }
 
     #[test]

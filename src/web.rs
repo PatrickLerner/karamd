@@ -108,6 +108,12 @@ struct SummaryOut {
     completed_at: Option<String>,
     cancelled_at: Option<String>,
     recurring: Option<String>,
+    // `karamd run` execution state (#044): explicit null when the task has no
+    // such marker, matching the SPA's nullable TypeScript shape.
+    ai_status: Option<String>,
+    ai_attempts: Option<u32>,
+    ai_run_started: Option<String>,
+    ai_last_error: Option<String>,
     ready: bool,
     blockers: Vec<String>,
 }
@@ -132,6 +138,10 @@ impl From<&TaskView> for SummaryOut {
             completed_at: v.completed_at.clone(),
             cancelled_at: v.cancelled_at.clone(),
             recurring: v.recurring.clone(),
+            ai_status: v.ai_status.clone(),
+            ai_attempts: v.ai_attempts,
+            ai_run_started: v.ai_run_started.clone(),
+            ai_last_error: v.ai_last_error.clone(),
             ready: v.ready,
             blockers: v.blockers.clone(),
         }
@@ -186,6 +196,9 @@ struct ConfigOut {
     /// Whether `run.enabled` is set (#043): the `ai-runnable` tag is inert
     /// unless this is true, so the web toggle annotates itself when it is off.
     run_enabled: bool,
+    /// `run.max_attempts` (#044): the denominator for the "n/max attempts" the
+    /// web shows on ai-runnable tasks, so a parked task is obvious at a glance.
+    run_max_attempts: u32,
     /// karamd's own version (from `CARGO_PKG_VERSION`), shown in the web header.
     version: String,
 }
@@ -378,6 +391,7 @@ async fn get_config(State(state): State<AppState>) -> std::result::Result<Respon
         workflow,
         today,
         run_enabled: vault.config.run.enabled,
+        run_max_attempts: vault.config.run.max_attempts,
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
     .into_response())
@@ -875,13 +889,14 @@ mod tests {
         let root = tempdir();
         fs::write(
             root.join(".taskmd.yaml"),
-            "workflow: pr-review\nrun:\n  enabled: true\nphases:\n  - id: v1\n    name: One\n  - name: Two\nweb:\n  today:\n    - v1\n",
+            "workflow: pr-review\nrun:\n  enabled: true\n  max_attempts: 5\nphases:\n  - id: v1\n    name: One\n  - name: Two\nweb:\n  today:\n    - v1\n",
         )
         .unwrap();
         let (status, body) = call(&root, get("/api/config")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["workflow"], "pr-review");
         assert_eq!(body["run_enabled"], true);
+        assert_eq!(body["run_max_attempts"], 5);
         assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(body["phases"][0]["id"], "v1");
         assert_eq!(body["phases"][1]["name"], "Two");

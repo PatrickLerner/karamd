@@ -48,6 +48,11 @@ export interface TaskSummary {
   completed_at: string | null;
   cancelled_at: string | null;
   recurring: string | null;
+  // `karamd run` execution state (#044); null on a task that has never run.
+  ai_status: string | null;
+  ai_attempts: number | null;
+  ai_run_started: string | null;
+  ai_last_error: string | null;
   ready: boolean;
   blockers: string[];
 }
@@ -83,6 +88,9 @@ export interface Config {
   // Whether `run.enabled` is set in the vault config. The `ai-runnable` tag is
   // inert unless this is true, so the Detail toggle annotates itself when off.
   run_enabled: boolean;
+  // `run.max_attempts`: the denominator for the "n/max attempts" shown on
+  // ai-runnable tasks (#044).
+  run_max_attempts: number;
   // karamd's version, shown small and dim in the header.
   version: string;
 }
