@@ -32,14 +32,21 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::next;
 use crate::output::TaskView;
 use crate::rule::{self, Rule};
-use crate::taskmd::{Graph, Status, SystemEntropy, Task, Vault};
+use crate::taskmd::{Graph, Status, SystemEntropy, Vault};
 use crate::verbs;
 
 /// Treat a stale `running` marker as not-running for display (#048): a dead run
 /// (crash/reboot) that the read path self-corrects, so the UI never shows a
 /// ghost run while waiting for the next `karamd run` to rewrite the file.
-fn clear_stale_run(view: &mut TaskView, task: &Task, timeout_secs: u64) {
-    if crate::run::is_running_stale(task, timeout_secs, chrono::Utc::now()) {
+/// Works off the view's own serialized markers, so it needs no second (strict)
+/// task lookup — the detail path stays tolerant of duplicate ids.
+fn clear_stale_run(view: &mut TaskView, timeout_secs: u64) {
+    if crate::run::marker_running_stale(
+        view.ai_status.as_deref(),
+        view.ai_run_started.as_deref(),
+        timeout_secs,
+        chrono::Utc::now(),
+    ) {
         view.ai_status = None;
         view.ai_run_started = None;
     }
@@ -307,7 +314,7 @@ async fn list_tasks(State(state): State<AppState>) -> std::result::Result<Respon
         .iter()
         .map(|t| {
             let mut view = TaskView::build(t, &graph, false);
-            clear_stale_run(&mut view, t, timeout);
+            clear_stale_run(&mut view, timeout);
             SummaryOut::from(&view)
         })
         .collect();
@@ -328,10 +335,11 @@ async fn get_task(
     Path(id): Path<String>,
 ) -> std::result::Result<Response, ApiError> {
     let mut view = verbs::show(&state.root, &id)?;
-    // Self-correct a ghost `running` marker for display (#048).
-    let vault = Vault::open(&state.root)?;
-    let task = vault.find(&id)?;
-    clear_stale_run(&mut view, &task, vault.config.run.timeout_secs);
+    // Self-correct a ghost `running` marker for display (#048). Read the timeout
+    // from config only (no strict task find) so a duplicate-id vault still
+    // renders the detail, matching the tolerant list endpoint.
+    let timeout = Vault::open(&state.root)?.config.run.timeout_secs;
+    clear_stale_run(&mut view, timeout);
     Ok(Json(DetailOut::from(&view)).into_response())
 }
 
@@ -397,8 +405,11 @@ async fn set_status(
         )
     })?;
     verbs::set_status(&state.root, &id, status, Local::now().date_naive())?;
-    // Re-read for the full detail (body included) the SPA renders after a change.
-    let view = verbs::show(&state.root, &id)?;
+    // Re-read for the full detail (body included) the SPA renders after a change,
+    // applying the same ghost-run correction as the other read paths (#048).
+    let mut view = verbs::show(&state.root, &id)?;
+    let timeout = Vault::open(&state.root)?.config.run.timeout_secs;
+    clear_stale_run(&mut view, timeout);
     Ok(Json(DetailOut::from(&view)).into_response())
 }
 
@@ -947,6 +958,28 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "in-progress");
         assert!(body["body"].as_str().unwrap().contains("body"));
+    }
+
+    #[tokio::test]
+    async fn set_status_clears_ghost_running_in_response() {
+        // Setting a new status leaves the (stale) ai_status marker on disk;
+        // the response must apply the same ghost-run correction (#048) so the
+        // detail the SPA renders isn't a spurious "running".
+        let root = tempdir();
+        write_task(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: T\nstatus: pending\ntags: [ai-runnable]\nai_status: running\nai_run_started: 2020-01-01T00:00:00Z\n---\n\n# T\n",
+        );
+        let req = json_req(
+            "POST",
+            "/api/tasks/001/status",
+            serde_json::json!({ "status": "blocked" }),
+        );
+        let (status, body) = call(&root, req).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "blocked");
+        assert!(body["ai_status"].is_null());
     }
 
     #[tokio::test]

@@ -135,7 +135,12 @@ fn read_attempts(task: &Task) -> u32 {
 /// unparseable timestamp counts as stale so it can never block forever.
 fn is_stale(started: Option<&str>, now: DateTime<Utc>, timeout_secs: u64) -> bool {
     match started.and_then(|s| DateTime::parse_from_rfc3339(s).ok()) {
-        Some(t) => (now - t.with_timezone(&Utc)).num_seconds() >= (2 * timeout_secs) as i64,
+        // saturating_mul + clamp so an extreme configured timeout can't overflow
+        // the u64 multiply (debug panic) or wrap the i64 cast negative.
+        Some(t) => {
+            let window = timeout_secs.saturating_mul(2).min(i64::MAX as u64) as i64;
+            (now - t.with_timezone(&Utc)).num_seconds() >= window
+        }
         None => true,
     }
 }
@@ -152,12 +157,24 @@ fn is_locked(task: &Task, cfg: &RunConfig, now: DateTime<Utc>) -> bool {
 /// `2 * timeout`): a dead run (SIGKILL, reboot mid-run) that should be treated
 /// and rewritten as not-running (#048), never displayed as a live run.
 pub fn is_running_stale(task: &Task, timeout_secs: u64, now: DateTime<Utc>) -> bool {
-    task.get(K_STATUS).and_then(|v| v.as_str()) == Some(STATUS_RUNNING)
-        && is_stale(
-            task.get(K_STARTED).and_then(|v| v.as_str()),
-            now,
-            timeout_secs,
-        )
+    marker_running_stale(
+        task.get(K_STATUS).and_then(|v| v.as_str()),
+        task.get(K_STARTED).and_then(|v| v.as_str()),
+        timeout_secs,
+        now,
+    )
+}
+
+/// Display-side staleness (#048): the same rule as [`is_running_stale`] but over
+/// the already-serialized `ai_status`/`ai_run_started` values, so the web read
+/// path corrects a ghost run without re-reading the task file.
+pub fn marker_running_stale(
+    ai_status: Option<&str>,
+    ai_run_started: Option<&str>,
+    timeout_secs: u64,
+    now: DateTime<Utc>,
+) -> bool {
+    ai_status == Some(STATUS_RUNNING) && is_stale(ai_run_started, now, timeout_secs)
 }
 
 /// Clear stale `running` markers left by a run that never finished cleanly
