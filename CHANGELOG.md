@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Web UI: a per-task **AI-runnable** toggle in the task detail view adds or
+  removes the `ai-runnable` tag (the tag `karamd run` selects on) by re-sending
+  the full tag set, so the task's other tags are never dropped. The button
+  reflects the tagged state and annotates itself when `run.enabled` is off in the
+  vault config. The `/api/config` response now includes `run_enabled` (#043).
+
 ## [0.7.0] - 2026-07-09
 
 ### Added

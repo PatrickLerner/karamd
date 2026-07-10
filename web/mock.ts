@@ -27,6 +27,7 @@ const config: Config = {
   // Mirrors `web.today` in `.taskmd.yaml`: the phases the Today tab merges,
   // in render order. Here MVP work lands in Today; Polish gets its own tab.
   today: ["mvp"],
+  run_enabled: true,
   version: "0.0.0-mock",
 };
 

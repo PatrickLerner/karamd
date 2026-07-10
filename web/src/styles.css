@@ -700,6 +700,27 @@ h3 {
   cursor: default;
 }
 
+/* the ai-runnable toggle when on: filled tint so its state reads at a glance */
+.actions button.toggle[aria-pressed="true"] {
+  color: var(--base3);
+  background: var(--violet);
+  border-color: var(--violet);
+}
+
+@media (hover: hover) {
+  .actions button.toggle[aria-pressed="true"]:not(:disabled):hover {
+    background: var(--violet);
+    border-color: var(--violet);
+    filter: brightness(1.08);
+  }
+}
+
+/* note under the actions when the task is tagged but run is off */
+.run-hint {
+  margin: -0.75rem 0 1.5rem;
+  font-size: 0.85rem;
+}
+
 .frontmatter {
   display: grid;
   grid-template-columns: max-content 1fr;

@@ -1689,7 +1689,10 @@ mod tests {
     #[test]
     fn run_dry_run_reports_nothing_when_not_due() {
         let (vault, config) = vault_with_rules(CAL);
-        // Outside window -> "nothing due" branch, dry-run path.
+        // Outside window -> "nothing due" branch, dry-run path. Pin `--today`
+        // so the branch is exercised regardless of the real date: CAL is
+        // annual 07-20 with a 10-day lead, so a run inside that window (e.g.
+        // early July) would otherwise be due and skip this branch.
         run([
             "karamd".into(),
             "generate".into(),
@@ -1697,6 +1700,8 @@ mod tests {
             vault.clone().into_os_string(),
             "--config".into(),
             config.into_os_string(),
+            "--today".into(),
+            "2026-01-15".into(),
             "--dry-run".into(),
         ])
         .unwrap();

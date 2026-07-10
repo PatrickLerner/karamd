@@ -183,6 +183,9 @@ struct ConfigOut {
     /// Phase ids the web "Today" tab merges, in render order (config-driven,
     /// with a default when `web.today` is unset).
     today: Vec<String>,
+    /// Whether `run.enabled` is set (#043): the `ai-runnable` tag is inert
+    /// unless this is true, so the web toggle annotates itself when it is off.
+    run_enabled: bool,
     /// karamd's own version (from `CARGO_PKG_VERSION`), shown in the web header.
     version: String,
 }
@@ -374,6 +377,7 @@ async fn get_config(State(state): State<AppState>) -> std::result::Result<Respon
         phases,
         workflow,
         today,
+        run_enabled: vault.config.run.enabled,
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
     .into_response())
@@ -871,12 +875,13 @@ mod tests {
         let root = tempdir();
         fs::write(
             root.join(".taskmd.yaml"),
-            "workflow: pr-review\nphases:\n  - id: v1\n    name: One\n  - name: Two\nweb:\n  today:\n    - v1\n",
+            "workflow: pr-review\nrun:\n  enabled: true\nphases:\n  - id: v1\n    name: One\n  - name: Two\nweb:\n  today:\n    - v1\n",
         )
         .unwrap();
         let (status, body) = call(&root, get("/api/config")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["workflow"], "pr-review");
+        assert_eq!(body["run_enabled"], true);
         assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(body["phases"][0]["id"], "v1");
         assert_eq!(body["phases"][1]["name"], "Two");
@@ -892,6 +897,8 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["workflow"], "solo");
         assert!(body["phases"].as_array().unwrap().is_empty());
+        // No config: run defaults off, so the web toggle annotates itself.
+        assert_eq!(body["run_enabled"], false);
         // No config: Today falls back to the built-in default.
         assert_eq!(body["today"][0], "ongoing");
         assert_eq!(body["today"][1], "now");

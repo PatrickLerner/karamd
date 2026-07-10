@@ -80,6 +80,9 @@ export interface Config {
   // always carries a value (the server applies the default when config omits
   // `web.today`), so the client never hardcodes the grouping.
   today: string[];
+  // Whether `run.enabled` is set in the vault config. The `ai-runnable` tag is
+  // inert unless this is true, so the Detail toggle annotates itself when off.
+  run_enabled: boolean;
   // karamd's version, shown small and dim in the header.
   version: string;
 }

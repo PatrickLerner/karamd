@@ -88,6 +88,7 @@ function App() {
     phases: [],
     workflow: "solo",
     today: DEFAULT_TODAY_PHASES,
+    run_enabled: false,
     version: "",
   };
   const tasks: TaskSummary[] | null = tasksQ.data?.tasks ?? null;

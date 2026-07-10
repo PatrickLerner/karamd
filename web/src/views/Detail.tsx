@@ -11,6 +11,10 @@ import { renderMarkdown, stripWikiLinks } from "../markdown";
 import { editHref, runHref, taskHref } from "../router";
 import type { Status, TaskDetail as Task, Workflow } from "../types";
 
+// The tag `karamd run` selects on: carrying it marks a task AI-executable.
+// Keep in sync with `RUNNABLE_TAG` in src/run.rs.
+const RUNNABLE_TAG = "ai-runnable";
+
 interface Transition {
   label: string;
   to: Status;
@@ -97,9 +101,23 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
     },
   });
 
+  // Toggle the `ai-runnable` tag. `edit --tag` replaces the whole set, so we
+  // re-send every existing tag with the marker added or removed — never
+  // dropping the task's other tags.
+  const tagMutation = useMutation({
+    mutationFn: (tags: string[]) => api.patchTask(id, { tags }),
+    onMutate: () => setDismissed(false),
+    onSuccess: (updated: Task) => {
+      queryClient.setQueryData(["task", id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["next"] });
+    },
+  });
+
   const task = taskQ.data ?? null;
-  const busy = mutation.isPending;
-  const errorSource = mutation.error ?? (task === null ? taskQ.error : null);
+  const busy = mutation.isPending || tagMutation.isPending;
+  const errorSource =
+    mutation.error ?? tagMutation.error ?? (task === null ? taskQ.error : null);
   const error = dismissed ? null : errorSource ? errorMessage(errorSource) : null;
   const apply = (to: Status) => mutation.mutate(to);
 
@@ -117,6 +135,15 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
       </div>
     );
   }
+
+  const runnable = task.tags.includes(RUNNABLE_TAG);
+  const runEnabled = configQ.data?.run_enabled ?? false;
+  const toggleRunnable = () =>
+    tagMutation.mutate(
+      runnable
+        ? task.tags.filter((t) => t !== RUNNABLE_TAG)
+        : [...task.tags, RUNNABLE_TAG],
+    );
 
   const depLinks = task.dependencies.map((d, i) => (
     <span key={d}>
@@ -158,7 +185,30 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
         <a className="btn" href={runHref(tab, id)}>
           Run with Claude
         </a>
+        <button
+          type="button"
+          className="toggle"
+          disabled={busy}
+          aria-pressed={runnable}
+          onClick={toggleRunnable}
+          title={
+            runEnabled
+              ? runnable
+                ? "AI execution on: karamd run picks this task up"
+                : "Mark this task for AI execution by karamd run"
+              : "run is disabled in this vault (set run.enabled); the tag has no effect yet"
+          }
+        >
+          {runnable ? "🤖 AI-runnable ✓" : "🤖 AI-runnable"}
+        </button>
       </div>
+      {runnable && !runEnabled && (
+        <p className="muted run-hint">
+          Tagged for AI execution, but <code>run</code> is disabled in this
+          vault. Set <code>run.enabled: true</code> for <code>karamd run</code>{" "}
+          to pick it up.
+        </p>
+      )}
       <dl className="frontmatter">
         <Field label="effort">{task.effort}</Field>
         <Field label="type">{task.type}</Field>
