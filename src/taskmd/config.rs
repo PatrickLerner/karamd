@@ -162,6 +162,11 @@ pub struct RunConfig {
     /// How many most-recent run records to keep; older records and their
     /// `.log` files are pruned. `0` keeps everything (no prune).
     pub log_retention: usize,
+    /// Safety cap on how many tasks one `karamd run` invocation executes while
+    /// re-scanning for newly-eligible tasks (#049). `0` means unlimited; a finite
+    /// value bounds a pathological rule/agent that keeps spawning new runnable
+    /// tasks. Remaining runnable tasks are deferred to the next invocation.
+    pub max_per_invocation: usize,
 }
 
 impl RunConfig {
@@ -187,6 +192,7 @@ impl Default for RunConfig {
             prompt_template: DEFAULT_PROMPT_TEMPLATE.into(),
             log_dir: None,
             log_retention: 1000,
+            max_per_invocation: 500,
         }
     }
 }
@@ -440,6 +446,7 @@ scopes:
         // Per-run log defaults (#045): no explicit dir, keep 1000 records.
         assert_eq!(c.run.log_dir, None);
         assert_eq!(c.run.log_retention, 1000);
+        assert_eq!(c.run.max_per_invocation, 500);
         assert_eq!(
             c.run.resolve_log_dir(Path::new("/v")),
             PathBuf::from("/v/.karamd/runs")
@@ -451,10 +458,11 @@ scopes:
 
     #[test]
     fn run_config_parses_log_knobs() {
-        let raw = "run:\n  enabled: true\n  log_dir: /var/log/karamd\n  log_retention: 50\n";
+        let raw = "run:\n  enabled: true\n  log_dir: /var/log/karamd\n  log_retention: 50\n  max_per_invocation: 3\n";
         let c: Config = serde_norway::from_str(raw).unwrap();
         assert_eq!(c.run.log_dir.as_deref(), Some("/var/log/karamd"));
         assert_eq!(c.run.log_retention, 50);
+        assert_eq!(c.run.max_per_invocation, 3);
         // An explicit dir wins over the vault-relative default.
         assert_eq!(
             c.run.resolve_log_dir(Path::new("/v")),

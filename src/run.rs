@@ -359,13 +359,133 @@ pub fn plan(vault: &Vault, now: DateTime<Utc>) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Execute every runnable task once, in id order, recording each outcome.
+/// Run a single task end to end: mark running (pre-increment attempts), render
+/// the prompt from the staged task, spawn via `runner`, re-read the (possibly
+/// agent-modified) task, record success (exit 0 *and* the agent moved the task
+/// to a terminal status) or failure, and append the per-run log record (#045).
+/// All writes go through a re-read then save, so a concurrent sync is not
+/// clobbered.
+fn run_one(
+    vault: &Vault,
+    cfg: &RunConfig,
+    log_dir: &Path,
+    runner: &dyn AgentRunner,
+    id: &str,
+    now: DateTime<Utc>,
+    today: NaiveDate,
+) -> Result<RunResult> {
+    let mut staged = vault.find(id)?;
+    mark_running(&mut staged, now);
+    vault.save(&staged)?;
+
+    let abs_path = staged
+        .rel_path
+        .as_ref()
+        .map(|p| vault.tasks_dir().join(p))
+        .unwrap_or_default();
+    let prompt = render_prompt(&cfg.prompt_template, &staged, &abs_path.to_string_lossy());
+    let working_dir = resolve_working_dir(&staged, cfg, &vault.root);
+    let agent_name = staged
+        .get(K_AGENT)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| cfg.agent.clone());
+    let log_file = run_log_filename(now, id);
+    let log_path = log_dir.join(&log_file);
+
+    // The resolved agent supplies the command for the log; an unknown agent
+    // is a failure that never spawns, with no exit code or output file.
+    let (outcome, command) = match resolve_agent(cfg, &staged) {
+        Ok(spec) => (
+            runner.run(
+                spec,
+                &prompt,
+                &working_dir,
+                cfg.timeout_secs,
+                Some(&log_path),
+            ),
+            spec.command.clone(),
+        ),
+        Err(detail) => (
+            AgentOutcome {
+                success: false,
+                detail,
+                ..Default::default()
+            },
+            Vec::new(),
+        ),
+    };
+
+    // Re-read post-agent: the agent may have run `karamd complete`, so the
+    // status on disk is the source of truth for the success check.
+    let mut after = vault.find(id)?;
+    // The attempt number as run (post-increment), captured before
+    // record_success clears the counter.
+    let attempt = read_attempts(&after);
+    let terminal = after.effective_status().is_terminal();
+    let (succeeded, detail) = if outcome.success && terminal {
+        (true, String::new())
+    } else if outcome.success {
+        (
+            false,
+            "agent exited 0 but did not mark the task complete".to_string(),
+        )
+    } else {
+        (false, outcome.detail.clone())
+    };
+
+    if succeeded {
+        record_success(&mut after);
+    } else {
+        record_failure(&mut after, &detail, today, cfg.max_attempts);
+    }
+    vault.save(&after)?;
+    let parked = after.tags().iter().any(|t| t == FAILED_TAG);
+
+    // Durable per-run record (#045). Best-effort: a log failure must not
+    // abort the run or lose the outcome.
+    let outcome_str = if succeeded {
+        "completed"
+    } else if parked {
+        "parked"
+    } else {
+        "failed"
+    };
+    let record = RunRecord {
+        id: id.to_string(),
+        agent: agent_name,
+        command,
+        working_dir: working_dir.to_string_lossy().into_owned(),
+        started_at: now.to_rfc3339(),
+        ended_at: (now + chrono::Duration::seconds(outcome.duration_s)).to_rfc3339(),
+        duration_s: outcome.duration_s,
+        attempt,
+        exit_code: outcome.exit_code,
+        outcome: outcome_str.to_string(),
+        last_error: (!detail.is_empty()).then(|| detail.clone()),
+        log_file,
+    };
+    if let Err(e) = write_run_log(log_dir, &record, cfg.log_retention) {
+        eprintln!("karamd: warning: run log write failed for {id}: {e}");
+    }
+
+    Ok(RunResult {
+        id: id.to_string(),
+        succeeded,
+        detail,
+        parked,
+    })
+}
+
+/// Execute runnable tasks, re-scanning after each so tasks that become eligible
+/// mid-invocation are drained too (#049), until nothing new is runnable.
 ///
-/// Per task: mark running (pre-increment attempts), render the prompt from the
-/// staged task, spawn via `runner`, re-read the (possibly agent-modified) task,
-/// then record success (exit 0 *and* the agent moved the task to a terminal
-/// status) or failure. All writes go through [`Vault::update`], which re-reads
-/// before mutating, so a concurrent sync is not clobbered.
+/// A task is run at most once per invocation (tracked in `done`), so a task that
+/// fails but is still under `max_attempts` is retried on the *next* invocation,
+/// not immediately in a tight loop. `run.max_per_invocation` caps the total to
+/// bound a pathological rule/agent that keeps spawning new runnable tasks; the
+/// remainder is deferred to the next run with a clear log line. Results are
+/// recorded in the order tasks were run.
 pub fn run_all(
     vault: &Vault,
     runner: &dyn AgentRunner,
@@ -381,118 +501,38 @@ pub fn run_all(
     // Rewrite ghost `running` markers from crashed prior runs before selecting,
     // so a dead run never lingers as "running" (#048).
     reconcile_stale(vault, now)?;
-    let scan = vault.scan()?;
-    let ids: Vec<String> = scan
-        .tasks
-        .iter()
-        .filter(|t| is_runnable(t, cfg, now))
-        .map(Task::id)
-        .collect();
 
-    for id in ids {
-        // Pre-increment attempts + take the running lock (find + save is exactly
-        // what Vault::update does: a fresh re-read before the write).
-        let mut staged = vault.find(&id)?;
-        mark_running(&mut staged, now);
-        vault.save(&staged)?;
-
-        let abs_path = staged
-            .rel_path
-            .as_ref()
-            .map(|p| vault.tasks_dir().join(p))
-            .unwrap_or_default();
-        let prompt = render_prompt(&cfg.prompt_template, &staged, &abs_path.to_string_lossy());
-        let working_dir = resolve_working_dir(&staged, cfg, &vault.root);
-        let agent_name = staged
-            .get(K_AGENT)
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| cfg.agent.clone());
-        let log_file = run_log_filename(now, &id);
-        let log_path = log_dir.join(&log_file);
-
-        // The resolved agent supplies the command for the log; an unknown agent
-        // is a failure that never spawns, with no exit code or output file.
-        let (outcome, command) = match resolve_agent(cfg, &staged) {
-            Ok(spec) => (
-                runner.run(
-                    spec,
-                    &prompt,
-                    &working_dir,
-                    cfg.timeout_secs,
-                    Some(&log_path),
-                ),
-                spec.command.clone(),
-            ),
-            Err(detail) => (
-                AgentOutcome {
-                    success: false,
-                    detail,
-                    ..Default::default()
-                },
-                Vec::new(),
-            ),
-        };
-
-        // Re-read post-agent: the agent may have run `karamd complete`, so the
-        // status on disk is the source of truth for the success check.
-        let mut after = vault.find(&id)?;
-        // The attempt number as run (post-increment), captured before
-        // record_success clears the counter.
-        let attempt = read_attempts(&after);
-        let terminal = after.effective_status().is_terminal();
-        let (succeeded, detail) = if outcome.success && terminal {
-            (true, String::new())
-        } else if outcome.success {
-            (
-                false,
-                "agent exited 0 but did not mark the task complete".to_string(),
-            )
-        } else {
-            (false, outcome.detail.clone())
-        };
-
-        if succeeded {
-            record_success(&mut after);
-        } else {
-            record_failure(&mut after, &detail, today, cfg.max_attempts);
+    let cap = cfg.max_per_invocation;
+    let mut done: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        if cap != 0 && report.ran.len() >= cap {
+            // Re-scan once more only to report whether anything was left behind.
+            let remaining = vault
+                .scan()?
+                .tasks
+                .iter()
+                .any(|t| is_runnable(t, cfg, now) && !done.contains(&t.id()));
+            if remaining {
+                eprintln!(
+                    "karamd: reached max_per_invocation ({cap}); deferring remaining runnable tasks to the next run"
+                );
+            }
+            break;
         }
-        vault.save(&after)?;
-        let parked = after.tags().iter().any(|t| t == FAILED_TAG);
-
-        // Durable per-run record (#045). Best-effort: a log failure must not
-        // abort the run or lose the outcome.
-        let outcome_str = if succeeded {
-            "completed"
-        } else if parked {
-            "parked"
-        } else {
-            "failed"
-        };
-        let record = RunRecord {
-            id: id.clone(),
-            agent: agent_name,
-            command,
-            working_dir: working_dir.to_string_lossy().into_owned(),
-            started_at: now.to_rfc3339(),
-            ended_at: (now + chrono::Duration::seconds(outcome.duration_s)).to_rfc3339(),
-            duration_s: outcome.duration_s,
-            attempt,
-            exit_code: outcome.exit_code,
-            outcome: outcome_str.to_string(),
-            last_error: (!detail.is_empty()).then(|| detail.clone()),
-            log_file,
-        };
-        if let Err(e) = write_run_log(&log_dir, &record, cfg.log_retention) {
-            eprintln!("karamd: warning: run log write failed for {id}: {e}");
-        }
-
-        report.ran.push(RunResult {
-            id,
-            succeeded,
-            detail,
-            parked,
-        });
+        // Re-scan every iteration so a task that became runnable during the
+        // previous one is picked up; skip anything already run this invocation.
+        let scan = vault.scan()?;
+        let next = scan
+            .tasks
+            .iter()
+            .filter(|t| is_runnable(t, cfg, now))
+            .map(Task::id)
+            .find(|id| !done.contains(id));
+        let Some(id) = next else { break };
+        done.insert(id.clone());
+        report
+            .ran
+            .push(run_one(vault, cfg, &log_dir, runner, &id, now, today)?);
     }
     Ok(report)
 }
@@ -1148,5 +1188,69 @@ mod tests {
         fs::create_dir_all(&log_dir).unwrap();
         fs::create_dir(log_dir.join("runs.jsonl")).unwrap();
         assert!(write_run_log(&log_dir, &record("1", "a.log"), 0).is_err());
+    }
+
+    // ---- re-scan the runnable set after each task (#049) ----
+
+    /// A runner that materialises a second runnable task the first time it runs
+    /// (simulating a task appearing mid-invocation), and never completes a task
+    /// (so each stays runnable but is guarded by the once-per-invocation set).
+    struct SpawningRunner {
+        tasks_dir: PathBuf,
+        calls: RefCell<u32>,
+    }
+
+    impl AgentRunner for SpawningRunner {
+        fn run(
+            &self,
+            _spec: &AgentSpec,
+            _prompt: &str,
+            _working_dir: &Path,
+            _timeout_secs: u64,
+            _log_path: Option<&Path>,
+        ) -> AgentOutcome {
+            let mut n = self.calls.borrow_mut();
+            if *n == 0 {
+                fs::write(self.tasks_dir.join("002-b.md"), runnable_task("002")).unwrap();
+            }
+            *n += 1;
+            AgentOutcome {
+                success: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    #[test]
+    fn run_all_rescans_and_drains_tasks_appearing_mid_run() {
+        let (vault, dir) = build_vault(CFG, &[("001-a.md", &runnable_task("001"))]);
+        let runner = SpawningRunner {
+            tasks_dir: dir.join("tasks"),
+            calls: RefCell::new(0),
+        };
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        let ran: Vec<&str> = report.ran.iter().map(|r| r.id.as_str()).collect();
+        // 002 appeared while 001 was running and was drained in the same run.
+        assert_eq!(ran, vec!["001", "002"]);
+        // Each ran exactly once: a failed-but-under-cap task is NOT retried
+        // immediately (it is deferred to the next invocation).
+        assert_eq!(*runner.calls.borrow(), 2);
+    }
+
+    #[test]
+    fn run_all_caps_tasks_per_invocation() {
+        let cfg = "run:\n  enabled: true\n  agent: claude\n  max_attempts: 2\n  max_per_invocation: 1\n  agents:\n    claude:\n      command: [claude]\n";
+        let (vault, _) = build_vault(
+            cfg,
+            &[
+                ("001-a.md", &runnable_task("001")),
+                ("002-b.md", &runnable_task("002")),
+            ],
+        );
+        let runner = FakeRunner::new(Mode::SucceedNoComplete);
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        // The cap stops after one task even though two were runnable.
+        assert_eq!(report.ran.len(), 1);
+        assert_eq!(runner.calls.borrow().len(), 1);
     }
 }
