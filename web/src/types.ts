@@ -201,6 +201,9 @@ export interface PreviewResponse {
 export interface SessionInfo {
   id: string;
   title: string;
+  // The agent the session was launched for (#051), or null for the legacy
+  // --run-command path. Lets the sidebar reattach to the same agent.
+  agent: string | null;
   running: boolean;
   exit_code: number | null;
 }

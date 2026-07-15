@@ -9,7 +9,8 @@ import { ErrorBanner } from "../components/Banner";
 import { attemptsLabel, PriorityChip, StatusChip } from "../components/Chip";
 import { renderMarkdown, stripWikiLinks } from "../markdown";
 import { editHref, runHref, taskHref } from "../router";
-import type { Status, TaskDetail as Task, Workflow } from "../types";
+import { isTerminal } from "../tabs";
+import type { Phase, Status, TaskDetail as Task, Workflow } from "../types";
 
 // The tag `karamd run` selects on: carrying it marks a task AI-executable.
 // Keep in sync with `RUNNABLE_TAG` / `FAILED_TAG` in src/run.rs.
@@ -118,10 +119,26 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
     },
   });
 
+  // One-click phase assignment (#052): PATCH the phase, then refresh this task
+  // and the shared list/ranking so the change lands everywhere at once.
+  const phaseMutation = useMutation({
+    mutationFn: (phase: string) => api.patchTask(id, { phase }),
+    onMutate: () => setDismissed(false),
+    onSuccess: (updated: Task) => {
+      queryClient.setQueryData(["task", id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["next"] });
+    },
+  });
+
   const task = taskQ.data ?? null;
-  const busy = mutation.isPending || tagMutation.isPending;
+  const busy =
+    mutation.isPending || tagMutation.isPending || phaseMutation.isPending;
   const errorSource =
-    mutation.error ?? tagMutation.error ?? (task === null ? taskQ.error : null);
+    mutation.error ??
+    tagMutation.error ??
+    phaseMutation.error ??
+    (task === null ? taskQ.error : null);
   const error = dismissed ? null : errorSource ? errorMessage(errorSource) : null;
   const apply = (to: Status) => mutation.mutate(to);
 
@@ -150,6 +167,16 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
       : runAgents.includes(defaultAgent)
         ? defaultAgent
         : (runAgents[0] ?? null);
+
+  // Configured phases a task can be assigned to (the null "no phase" entry
+  // excluded). Quick-assign only shows for an unphased, still-open task (#052).
+  const assignablePhases = (configQ.data?.phases ?? []).filter(
+    (p): p is Phase & { id: string } => p.id !== null,
+  );
+  const canAssignPhase =
+    task.phase === null &&
+    !isTerminal(task.status) &&
+    assignablePhases.length > 0;
 
   const runnable = task.tags.includes(RUNNABLE_TAG);
   const parked = task.tags.includes(FAILED_TAG);
@@ -242,6 +269,25 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
           {runnable ? "🤖 AI-runnable ✓" : "🤖 AI-runnable"}
         </button>
       </div>
+      {canAssignPhase && (
+        <div
+          className="actions phase-assign"
+          role="group"
+          aria-label="Assign phase"
+        >
+          <span className="phase-assign-label">Assign phase:</span>
+          {assignablePhases.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              disabled={busy}
+              onClick={() => phaseMutation.mutate(p.id)}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
       {runnable && !runEnabled && (
         <p className="muted run-hint">
           Tagged for AI execution, but <code>run</code> is disabled in this

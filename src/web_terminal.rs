@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::taskmd::Vault;
-use crate::terminal::{Scrollback, launch_argv, parse_command, seed_prompt};
+use crate::terminal::{Scrollback, launch_argv, parse_command, seed_prompt, with_seeded_prompt};
 use crate::web::{ApiError, AppState};
 
 /// Control messages the client may send as text frames.
@@ -76,6 +76,11 @@ const BROADCAST_CAP: usize = 1024;
 /// `events` and can push stdin via `in_tx`.
 struct Session {
     title: String,
+    /// The configured agent name this session was launched for (#051), or `None`
+    /// for the legacy `--run-command` path. Exposed on [`SessionInfo`] so the
+    /// sidebar can rebuild the `/run/<agent>` route and reattach to the *same*
+    /// agent instead of the default.
+    agent: Option<String>,
     /// The argv this session was spawned with; a new attach requesting a
     /// different tool (#047) relaunches rather than reattaching to the old one.
     argv: Vec<String>,
@@ -84,6 +89,18 @@ struct Session {
     in_tx: std::sync::mpsc::Sender<ToPty>,
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
     status: Arc<Mutex<SessionStatus>>,
+}
+
+/// Everything needed to launch (or match) one terminal session: which agent, the
+/// program argv (headless flags/placeholders already stripped), how to hand it
+/// the prompt, and the seeded prompt itself. Bundled so `get_or_create` and
+/// `spawn_session` take one descriptor instead of a long argument list, and the
+/// reattach check compares against a single value.
+struct LaunchSpec {
+    agent: Option<String>,
+    argv: Vec<String>,
+    prompt_flag: Option<String>,
+    prompt: String,
 }
 
 /// The set of live sessions, keyed by task id. Cloneable-shareable via `Arc` in
@@ -105,21 +122,24 @@ impl SessionRegistry {
         id: &str,
         title: &str,
         root: PathBuf,
-        argv: Vec<String>,
-        prompt: String,
+        spec: LaunchSpec,
     ) -> std::result::Result<Arc<Session>, String> {
         let mut map = self.sessions.lock().unwrap();
         if let Some(existing) = map.get(id) {
-            // Same tool: reattach to the live session (persistence, #021). A
-            // different tool was picked (#047): kill the old one and relaunch,
-            // so the chosen agent actually starts.
-            if existing.argv == argv {
+            // Same agent + tool: reattach to the live session (persistence, #021).
+            // A different agent/tool was picked (#047/#051): kill the old one and
+            // relaunch so the chosen agent actually starts. Comparing the agent
+            // name too means a sidebar reattach that carries the agent lands on
+            // the same session instead of the default relaunching over it (#051).
+            // The agent name deterministically implies `prompt_flag`, so matching
+            // agent + argv is sufficient identity.
+            if existing.agent == spec.agent && existing.argv == spec.argv {
                 return Ok(existing.clone());
             }
             let _ = existing.killer.lock().unwrap().kill();
             map.remove(id);
         }
-        let session = spawn_session(title, root, argv, prompt)?;
+        let session = spawn_session(title, root, spec)?;
         map.insert(id.to_string(), session.clone());
         Ok(session)
     }
@@ -147,6 +167,7 @@ impl SessionRegistry {
                 SessionInfo {
                     id: id.clone(),
                     title: s.title.clone(),
+                    agent: s.agent.clone(),
                     running,
                     exit_code,
                 }
@@ -175,12 +196,24 @@ impl Drop for SessionRegistry {
 fn spawn_session(
     title: &str,
     root: PathBuf,
-    argv: Vec<String>,
-    prompt: String,
+    spec: LaunchSpec,
 ) -> std::result::Result<Arc<Session>, String> {
+    let LaunchSpec {
+        agent,
+        argv,
+        prompt_flag,
+        prompt,
+    } = spec;
     if argv.is_empty() {
         return Err("run-command is empty".to_string());
     }
+
+    // Seed the task context as the final argument(s) so the session starts
+    // working on it immediately: a bare positional for claude (`claude
+    // "<prompt>"`), or behind the agent's `terminal_prompt_flag` for opencode
+    // (`opencode --prompt "<prompt>"`), which treats a positional as a directory
+    // (#051). exec-style args are not shell-parsed, so a multi-line prompt is safe.
+    let launch = with_seeded_prompt(argv.clone(), &prompt, prompt_flag.as_deref());
 
     let pty = native_pty_system();
     let pair = pty
@@ -192,14 +225,10 @@ fn spawn_session(
         })
         .map_err(|e| format!("openpty failed: {e}"))?;
 
-    let mut cmd = CommandBuilder::new(&argv[0]);
-    for arg in &argv[1..] {
+    let mut cmd = CommandBuilder::new(&launch[0]);
+    for arg in &launch[1..] {
         cmd.arg(arg);
     }
-    // Seed the task context as the final argument so the session starts working
-    // on it immediately (e.g. `claude "<prompt>"`). exec-style args are not
-    // shell-parsed, so a multi-line prompt is safe.
-    cmd.arg(&prompt);
     cmd.cwd(&root);
 
     let child = pair
@@ -282,6 +311,7 @@ fn spawn_session(
 
     Ok(Arc::new(Session {
         title: title.to_string(),
+        agent,
         argv,
         scrollback,
         events,
@@ -312,27 +342,37 @@ pub(crate) async fn run_handler(
     let task = vault.find(&id)?;
     let title = task.title().to_string();
     let prompt = seed_prompt(&task);
-    let argv = resolve_launch_argv(&vault, params.agent.as_deref(), &state.run_command)?;
+    let (argv, prompt_flag) =
+        resolve_launch_argv(&vault, params.agent.as_deref(), &state.run_command)?;
+    let spec = LaunchSpec {
+        agent: params.agent.clone(),
+        argv,
+        prompt_flag,
+        prompt,
+    };
     let root = state.root.as_ref().clone();
     let sessions = state.sessions.clone();
     Ok(ws.on_upgrade(move |socket| async move {
         let mut socket = socket;
-        match sessions.get_or_create(&id, &title, root, argv, prompt) {
+        match sessions.get_or_create(&id, &title, root, spec) {
             Ok(session) => attach(socket, session).await,
             Err(e) => close_with_error(&mut socket, &e).await,
         }
     }))
 }
 
-/// Resolve the terminal launch argv: a named `run.agents` entry (with prompt
-/// placeholders stripped, since the terminal is interactive) when `agent` is
-/// given, else the plain `--run-command`. An unknown agent name is a client
-/// error, never an arbitrary command.
+/// Resolve the terminal launch argv **plus how to seed the prompt**: a named
+/// `run.agents` entry (with headless placeholders stripped, since the terminal is
+/// interactive) when `agent` is given, else the plain `--run-command`. Returns
+/// `(argv, prompt_flag)` where `prompt_flag` is the agent's
+/// `terminal_prompt_flag` (opencode's `--prompt`, #051), or `None` for a bare
+/// positional (claude and the legacy run-command path). An unknown agent name is
+/// a client error, never an arbitrary command.
 fn resolve_launch_argv(
     vault: &Vault,
     agent: Option<&str>,
     run_command: &str,
-) -> std::result::Result<Vec<String>, ApiError> {
+) -> std::result::Result<(Vec<String>, Option<String>), ApiError> {
     match agent {
         Some(name) => {
             let spec = vault.config.run.agents.get(name).ok_or_else(|| {
@@ -340,9 +380,12 @@ fn resolve_launch_argv(
                     "unknown agent `{name}` (not configured in run.agents)"
                 ))
             })?;
-            Ok(launch_argv(&spec.command))
+            Ok((
+                launch_argv(&spec.command),
+                spec.terminal_prompt_flag.clone(),
+            ))
         }
-        None => Ok(parse_command(run_command)),
+        None => Ok((parse_command(run_command), None)),
     }
 }
 
@@ -411,6 +454,9 @@ fn exit_frame(code: i32) -> String {
 struct SessionInfo {
     id: String,
     title: String,
+    /// The agent the session was launched for (#051), or `null` for the legacy
+    /// `--run-command` path. The sidebar uses it to reattach to the same agent.
+    agent: Option<String>,
     running: bool,
     exit_code: Option<i32>,
 }

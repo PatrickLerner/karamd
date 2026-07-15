@@ -125,6 +125,16 @@ pub struct AgentSpec {
     pub command: Vec<String>,
     #[serde(default)]
     pub prompt_via: PromptVia,
+    /// How the *interactive* embedded terminal (#010/#051) hands the seeded task
+    /// prompt to the bare program (the headless `command`/`prompt_via` above is
+    /// for `karamd run` and its non-interactive flags are dropped for a TUI).
+    /// `None` (default): pass the prompt as a bare final positional, which claude
+    /// reads as its initial prompt (`claude "<prompt>"`). `Some(flag)`: prepend
+    /// the flag, e.g. `--prompt`, which opencode's TUI needs (a bare positional
+    /// is a *directory* to it, so opencode aborts with "failed to change
+    /// directory").
+    #[serde(default)]
+    pub terminal_prompt_flag: Option<String>,
 }
 
 /// Default prompt template when `run.prompt_template` is unset. Instructs the
@@ -492,7 +502,7 @@ scopes:
 
     #[test]
     fn run_config_parses_agents_and_prompt_via() {
-        let raw = "run:\n  enabled: true\n  agent: opencode\n  working_dir: /repo\n  timeout_secs: 60\n  max_attempts: 2\n  prompt_template: \"do {id}\"\n  agents:\n    claude:\n      command: [claude, -p, \"{prompt}\"]\n    opencode:\n      command: [opencode, run]\n      prompt_via: stdin\n    filed:\n      command: [tool, \"{prompt_file}\"]\n      prompt_via: file\n";
+        let raw = "run:\n  enabled: true\n  agent: opencode\n  working_dir: /repo\n  timeout_secs: 60\n  max_attempts: 2\n  prompt_template: \"do {id}\"\n  agents:\n    claude:\n      command: [claude, -p, \"{prompt}\"]\n    opencode:\n      command: [opencode, run]\n      prompt_via: stdin\n      terminal_prompt_flag: \"--prompt\"\n    filed:\n      command: [tool, \"{prompt_file}\"]\n      prompt_via: file\n";
         let c: Config = serde_norway::from_str(raw).unwrap();
         assert!(c.run.enabled);
         assert_eq!(c.run.agent, "opencode");
@@ -507,6 +517,13 @@ scopes:
             vec!["claude", "-p", "{prompt}"]
         );
         assert_eq!(c.run.agents["opencode"].prompt_via, PromptVia::Stdin);
+        // The interactive terminal seeds opencode's prompt behind a flag (#051);
+        // claude leaves it unset (bare positional).
+        assert_eq!(
+            c.run.agents["opencode"].terminal_prompt_flag.as_deref(),
+            Some("--prompt")
+        );
+        assert_eq!(c.run.agents["claude"].terminal_prompt_flag, None);
         assert_eq!(c.run.agents["filed"].prompt_via, PromptVia::File);
     }
 

@@ -88,6 +88,28 @@ pub fn launch_argv(command: &[String]) -> Vec<String> {
     command.first().cloned().into_iter().collect()
 }
 
+/// Append the seeded task prompt to an already-resolved interactive launch argv
+/// (#051). claude reads a bare final positional as its initial prompt (`claude
+/// "<prompt>"`); opencode's TUI treats a positional as a *directory* and aborts,
+/// so it needs the prompt behind a flag (`opencode --prompt "<prompt>"`),
+/// configured per agent via `run.agents.<n>.terminal_prompt_flag`. An empty argv
+/// stays empty (the caller reports the empty run-command); a non-empty argv gains
+/// the optional flag then the prompt as its final argument(s).
+pub fn with_seeded_prompt(
+    mut argv: Vec<String>,
+    prompt: &str,
+    prompt_flag: Option<&str>,
+) -> Vec<String> {
+    if argv.is_empty() {
+        return argv;
+    }
+    if let Some(flag) = prompt_flag {
+        argv.push(flag.to_string());
+    }
+    argv.push(prompt.to_string());
+    argv
+}
+
 /// Split a command string into argv with minimal shell-like quoting: whitespace
 /// separates tokens; single or double quotes group (and are stripped). A
 /// backslash inside is kept literally (no escape processing). Good enough for
@@ -177,6 +199,23 @@ mod tests {
         );
         // An empty command yields no argv.
         assert!(launch_argv(&[]).is_empty());
+    }
+
+    #[test]
+    fn with_seeded_prompt_bare_positional_and_flag() {
+        // No flag (claude): prompt is the bare final positional.
+        assert_eq!(
+            with_seeded_prompt(vec!["claude".into()], "do it", None),
+            vec!["claude", "do it"]
+        );
+        // A flag (opencode): flag then prompt, so the TUI reads a --prompt value
+        // rather than mistaking the prompt for a project directory.
+        assert_eq!(
+            with_seeded_prompt(vec!["opencode".into()], "do it", Some("--prompt")),
+            vec!["opencode", "--prompt", "do it"]
+        );
+        // An empty argv stays empty (nothing to launch), never a lone prompt.
+        assert!(with_seeded_prompt(vec![], "do it", Some("--prompt")).is_empty());
     }
 
     #[test]

@@ -187,7 +187,10 @@ function App() {
           sessions={sessions}
           activeSessionId={activeSessionId}
           onSelectSession={(id) => {
-            navigate(runHref(tabForLinks, id));
+            // Carry the session's agent so reattach targets the same tool
+            // instead of the default relaunching over it (#051).
+            const s = sessions.find((x) => x.id === id);
+            navigate(runHref(tabForLinks, id, s?.agent ?? null));
             setMenuOpen(false);
           }}
           onKillSession={(id) => void killSession(id)}

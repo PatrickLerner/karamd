@@ -293,6 +293,19 @@ karamd web --vault /path/to/vault --web-dir web/dist --run-command claude
 
 - `--run-command` (or `KARAMD_RUN_COMMAND`) is what gets spawned; it defaults to
   `claude`. Set it to any command (e.g. a wrapper) for testing.
+- With `run.agents` configured you can pick a specific agent instead. The seeded
+  prompt is passed as the program's final positional argument (`claude
+  "<prompt>"`). A TUI that treats a positional as a **directory** — opencode does
+  — needs the prompt behind a flag instead; set `terminal_prompt_flag` on that
+  agent so it launches as `opencode --prompt "<prompt>"`:
+
+  ```yaml
+  run:
+    agents:
+      opencode:
+        command: [opencode]
+        terminal_prompt_flag: "--prompt"
+  ```
 - **Safety:** this spawns a real process that can edit the vault/project, over
   the same no-auth server. The tailnet + Tailscale ACLs are the only boundary,
   so never expose `karamd web` on a public interface. Launch is always explicit

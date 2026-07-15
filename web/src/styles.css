@@ -652,6 +652,18 @@ h3 {
   margin: 0 0 1.5rem;
 }
 
+/* Quick phase assignment for an unphased task (#052): sits below the actions,
+   its buttons share the .actions button voice. */
+.phase-assign {
+  align-items: center;
+  margin-top: -0.75rem;
+}
+
+.phase-assign-label {
+  font-size: 0.85rem;
+  color: var(--base1);
+}
+
 /* One button voice everywhere: quiet outline on the paper, compact height,
    filling to the tint on hover. Shared by + New, detail actions and forms. */
 .actions button,
