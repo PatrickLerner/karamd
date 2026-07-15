@@ -154,6 +154,26 @@ export function Terminal({
       }
     };
 
+    // Shift+Enter / Alt+Enter should insert a newline, not submit. xterm.js emits
+    // a bare \r for all of them, which Claude Code's REPL reads as submit. Send
+    // ESC+CR (\x1b\r) instead — the sequence iTerm2 sends for Option+Enter and that
+    // `/terminal-setup` maps Shift+Enter to, which Claude Code treats as "newline
+    // without submit". Registered before onData so the default \r is suppressed.
+    term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (
+        event.type === "keydown" &&
+        event.key === "Enter" &&
+        (event.shiftKey || event.altKey)
+      ) {
+        event.preventDefault();
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(encoder.encode("\x1b\r"));
+        }
+        return false;
+      }
+      return true;
+    });
+
     const inputSub = term.onData((data: string) => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(encoder.encode(data));
