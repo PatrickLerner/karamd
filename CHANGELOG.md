@@ -6,6 +6,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-15
+
+### Added
+
+- Web UI list: **one-click phase assignment** for unphased tasks. A task with no
+  phase (parked in Today) now shows a button per configured phase; clicking one
+  assigns it and the row regroups out of Today, no edit round-trip (#052).
+
+### Fixed
+
+- Web UI embedded terminal: launching **opencode** (or any agent whose TUI reads
+  a bare positional argument as a directory) no longer fails with "failed to
+  change directory". The seeded prompt is now passed behind a configurable
+  `run.agents.<name>.terminal_prompt_flag` (e.g. `--prompt`) instead of always as
+  a positional (#051).
+- Web UI embedded terminal: reattaching to a running session from the sidebar now
+  reconnects to the **same agent** it was launched with, instead of relaunching
+  the default agent over it. Sessions now carry their agent (`GET /api/sessions`)
+  so the sidebar rebuilds the correct `/run/<agent>` route (#051).
+
 ## [0.8.1] - 2026-07-15
 
 ### Fixed
