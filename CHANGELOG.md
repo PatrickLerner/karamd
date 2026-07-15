@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-15
+
+### Fixed
+
+- Web UI embedded terminal: **Shift+Enter** (and Alt/Option+Enter) now inserts a
+  newline instead of submitting. xterm.js emits a bare `\r` for these, which the
+  running agent's REPL reads as submit; the terminal now sends `ESC`+`CR`
+  (`\x1b\r`) for a modified Enter, the sequence Claude Code treats as "newline
+  without submit" (#050).
+
 ## [0.8.0] - 2026-07-10
 
 ### Added
@@ -219,6 +229,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   triggers, idempotent creation via a `recurring:` frontmatter marker, `--dry-run`
   and `--today` overrides, Nix flake, and CI.
 
+[0.8.1]: https://github.com/PatrickLerner/karamd/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/PatrickLerner/karamd/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/PatrickLerner/karamd/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/PatrickLerner/karamd/compare/v0.6.0...v0.6.1
