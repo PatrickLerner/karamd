@@ -652,15 +652,17 @@ h3 {
   margin: 0 0 1.5rem;
 }
 
-/* Quick phase assignment for an unphased task (#052): sits below the actions,
-   its buttons share the .actions button voice. */
-.phase-assign {
-  align-items: center;
-  margin-top: -0.75rem;
+/* Phase switcher (#054): an action button showing the current phase with a
+   caret that opens a menu of configured phases, reusing the run-split menu
+   look. Replaces #052's flat quick-assign row. */
+.phase-split {
+  position: relative;
+  display: inline-flex;
 }
 
-.phase-assign-label {
-  font-size: 0.85rem;
+.phase-split-caret {
+  margin-left: 0.35rem;
+  font-size: 0.7rem;
   color: var(--base1);
 }
 
@@ -712,18 +714,39 @@ h3 {
   cursor: default;
 }
 
-/* the ai-runnable toggle when on: filled tint so its state reads at a glance */
-.actions button.toggle[aria-pressed="true"] {
-  color: var(--base3);
-  background: var(--violet);
-  border-color: var(--violet);
+/* ai-runnable toggle, shown inline in the tags row (#056): reads as tag text,
+   not an actions button. "+ai-runnable" to add; tinted + bold when active,
+   click to remove. */
+.tags-value {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tag-toggle {
+  font: inherit;
+  padding: 0;
+  color: var(--base1);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Once added it reads as a plain tag (inherits the tags row's text colour),
+   just clickable to remove. */
+.tag-toggle.on {
+  color: inherit;
+}
+
+.tag-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 @media (hover: hover) {
-  .actions button.toggle[aria-pressed="true"]:not(:disabled):hover {
-    background: var(--violet);
-    border-color: var(--violet);
-    filter: brightness(1.08);
+  .tag-toggle:not(:disabled):hover {
+    text-decoration: underline;
   }
 }
 
@@ -761,14 +784,98 @@ h3 {
 }
 
 /* agent picker beside the "Run with…" button (#047) */
-.run-agent-select {
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.2rem 0.4rem;
-  border: 1px solid var(--base1);
-  border-radius: 0.2rem;
+/* Split "Run with…" button: one framed control with two hit areas (#051). The
+   container owns the single border + rounding; the halves are borderless and
+   share a thin divider, so they read as one button, not two touching boxes. */
+.run-split {
+  position: relative;
+  display: inline-flex;
+  border: 1px solid color-mix(in srgb, var(--base1) 55%, var(--base2));
+  border-radius: 0.3rem;
+  transition: border-color 0.12s ease;
+}
+
+@media (hover: hover) {
+  .run-split:hover {
+    border-color: var(--base1);
+  }
+}
+
+/* The main half is a .btn; drop its own frame and let it fill inside the
+   container, rounding only the left corners so its hover tint stays inside.
+   Scoped under .actions to outrank the shared `.actions .btn` frame rules. */
+.actions .run-split-main {
+  border: none;
+  border-radius: 0.3rem 0 0 0.3rem;
+}
+
+/* Scoped under .actions to outrank the shared `.actions button` rules (which
+   would otherwise give the caret its own full rounded border, the very thing
+   that made the two halves look detached). */
+.actions .run-split-toggle {
+  font-size: 0.7rem;
+  min-height: 2.35rem;
+  padding: 0 0.5rem;
+  color: var(--base1);
+  background: none;
+  border: none;
+  border-left: 1px solid color-mix(in srgb, var(--base1) 40%, transparent);
+  border-radius: 0 0.3rem 0.3rem 0;
+}
+
+@media (hover: hover) {
+  .actions .run-split-toggle:not(:disabled):hover {
+    background: var(--base2);
+    border-color: color-mix(in srgb, var(--base1) 40%, transparent);
+    color: var(--base01);
+  }
+}
+
+.run-split-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 10;
+  min-width: 9rem;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
   background: var(--base3);
+  border: 1px solid color-mix(in srgb, var(--base1) 55%, var(--base2));
+  border-radius: 0.3rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+}
+
+.actions .run-split-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  min-height: 0;
+  font-size: 0.85rem;
+  text-align: left;
+  padding: 0.35rem 0.5rem;
   color: var(--base01);
+  background: none;
+  border: none;
+  border-radius: 0.2rem;
+}
+
+.actions .run-split-menu button[aria-checked="true"] {
+  font-weight: 600;
+}
+
+.run-split-check {
+  display: inline-block;
+  width: 0.8rem;
+  color: var(--blue);
+}
+
+@media (hover: hover) {
+  .actions .run-split-menu button:not(:disabled):hover {
+    background: var(--base2);
+    border-color: transparent;
+  }
 }
 
 /* the run-state block on the detail pane */

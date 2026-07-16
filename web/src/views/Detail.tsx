@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   useMutation,
   useQuery,
@@ -16,6 +16,8 @@ import type { Phase, Status, TaskDetail as Task, Workflow } from "../types";
 // Keep in sync with `RUNNABLE_TAG` / `FAILED_TAG` in src/run.rs.
 const RUNNABLE_TAG = "ai-runnable";
 const FAILED_TAG = "ai-failed";
+// localStorage key remembering the last agent picked in the split Run button.
+const RUN_AGENT_KEY = "karamd.runAgent";
 
 interface Transition {
   label: string;
@@ -26,8 +28,8 @@ function transitions(status: Status, workflow: Workflow): Transition[] {
   switch (status) {
     case "pending":
       return [
-        { label: "Start", to: "in-progress" },
         { label: "Complete", to: "completed" },
+        { label: "Start", to: "in-progress" },
         { label: "Cancel", to: "cancelled" },
       ];
     case "in-progress":
@@ -83,9 +85,98 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 export function Detail({ id, tab }: { id: string; tab: string }) {
   const queryClient = useQueryClient();
   const [dismissed, setDismissed] = useState(false);
-  // Which configured agent the "Run with…" control launches; null = the
-  // config default (#047).
-  const [pickedAgent, setPickedAgent] = useState<string | null>(null);
+  // Which agent the split Run button launches. Seeded from localStorage so the
+  // last pick sticks across reloads and tasks (#047/#051); null falls back to
+  // the config default. `agentMenuOpen` drives the little switcher on the
+  // button's caret.
+  const [pickedAgent, setPickedAgent] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(RUN_AGENT_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const runSplitRef = useRef<HTMLDivElement | null>(null);
+  // The phase switcher (#054): a dropdown to move the task to any configured
+  // phase, styled like the run switcher. Replaces #052's flat quick-assign row.
+  const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
+  const phaseSplitRef = useRef<HTMLDivElement | null>(null);
+  // The status switcher (#055): a dropdown over the available status
+  // transitions, styled like the phase/run switchers.
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
+  const statusSplitRef = useRef<HTMLDivElement | null>(null);
+
+  function chooseAgent(agent: string) {
+    setPickedAgent(agent);
+    try {
+      localStorage.setItem(RUN_AGENT_KEY, agent);
+    } catch {
+      // private mode / disabled storage: the pick still applies this session.
+    }
+    setAgentMenuOpen(false);
+  }
+
+  // Close the agent switcher on an outside click or Escape.
+  useEffect(() => {
+    if (!agentMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (runSplitRef.current && !runSplitRef.current.contains(e.target as Node))
+        setAgentMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAgentMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [agentMenuOpen]);
+
+  // Close the phase switcher on an outside click or Escape (mirrors the agent
+  // switcher above).
+  useEffect(() => {
+    if (!phaseMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (
+        phaseSplitRef.current &&
+        !phaseSplitRef.current.contains(e.target as Node)
+      )
+        setPhaseMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPhaseMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [phaseMenuOpen]);
+
+  // Close the status switcher on an outside click or Escape.
+  useEffect(() => {
+    if (!statusMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (
+        statusSplitRef.current &&
+        !statusSplitRef.current.contains(e.target as Node)
+      )
+        setStatusMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setStatusMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [statusMenuOpen]);
 
   const taskQ = useQuery({
     queryKey: ["task", id],
@@ -103,6 +194,7 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
       queryClient.setQueryData(["task", id], updated);
       void queryClient.invalidateQueries({ queryKey: ["tasks"] });
       void queryClient.invalidateQueries({ queryKey: ["next"] });
+      setStatusMenuOpen(false);
     },
   });
 
@@ -119,8 +211,8 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
     },
   });
 
-  // One-click phase assignment (#052): PATCH the phase, then refresh this task
-  // and the shared list/ranking so the change lands everywhere at once.
+  // Phase switch (#054): PATCH the phase, then refresh this task and the shared
+  // list/ranking so the change lands everywhere at once, and close the menu.
   const phaseMutation = useMutation({
     mutationFn: (phase: string) => api.patchTask(id, { phase }),
     onMutate: () => setDismissed(false),
@@ -128,6 +220,7 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
       queryClient.setQueryData(["task", id], updated);
       void queryClient.invalidateQueries({ queryKey: ["tasks"] });
       void queryClient.invalidateQueries({ queryKey: ["next"] });
+      setPhaseMenuOpen(false);
     },
   });
 
@@ -168,18 +261,28 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
         ? defaultAgent
         : (runAgents[0] ?? null);
 
-  // Configured phases a task can be assigned to (the null "no phase" entry
-  // excluded). Quick-assign only shows for an unphased, still-open task (#052).
+  // Configured phases a task can be moved to (the null "no phase" entry
+  // excluded). The switcher shows for any open task with at least one phase;
+  // unlike #052 it is not gated on the task currently being unphased (#054).
   const assignablePhases = (configQ.data?.phases ?? []).filter(
     (p): p is Phase & { id: string } => p.id !== null,
   );
-  const canAssignPhase =
-    task.phase === null &&
-    !isTerminal(task.status) &&
-    assignablePhases.length > 0;
+  const canChangePhase = !isTerminal(task.status) && assignablePhases.length > 0;
+  // Available status transitions. 2+ collapse into a dropdown (#055); a single
+  // one (Reopen) stays a plain button.
+  const statusTransitions = transitions(task.status, workflow);
+  // Label for the trigger: the current phase's name, its raw id if it is not a
+  // configured phase, or "No phase" when unset.
+  const currentPhaseName =
+    task.phase === null
+      ? "No phase"
+      : (assignablePhases.find((p) => p.id === task.phase)?.name ?? task.phase);
 
   const runnable = task.tags.includes(RUNNABLE_TAG);
   const parked = task.tags.includes(FAILED_TAG);
+  // Tags shown as plain text: everything except ai-runnable, which the inline
+  // toggle in the tags row owns.
+  const otherTags = task.tags.filter((t) => t !== RUNNABLE_TAG);
   const runEnabled = configQ.data?.run_enabled ?? false;
   const runMaxAttempts = configQ.data?.run_max_attempts ?? 0;
   // Show the run-state block whenever the task carries any `karamd run` marker,
@@ -222,72 +325,130 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
         )}
       </p>
       <div className="actions">
-        {transitions(task.status, workflow).map((t) => (
+        {statusTransitions.length === 1 ? (
           <button
-            key={t.to + t.label}
             type="button"
             disabled={busy}
-            onClick={() => void apply(t.to)}
+            onClick={() => void apply(statusTransitions[0].to)}
           >
-            {t.label}
+            {statusTransitions[0].label}
           </button>
-        ))}
+        ) : (
+          <div className="phase-split" ref={statusSplitRef}>
+            <button
+              type="button"
+              className="phase-split-toggle"
+              aria-haspopup="menu"
+              aria-expanded={statusMenuOpen}
+              aria-label="Change status"
+              disabled={busy}
+              onClick={() => setStatusMenuOpen((o) => !o)}
+            >
+              Status: {task.status}{" "}
+              <span className="phase-split-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+            {statusMenuOpen && (
+              <ul className="run-split-menu" role="menu">
+                {statusTransitions.map((t) => (
+                  <li key={t.to + t.label} role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => void apply(t.to)}
+                    >
+                      <span className="run-split-check" aria-hidden="true" />
+                      {t.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <a className="btn" href={editHref(tab, id)}>
           Edit
         </a>
-        {runAgents.length > 1 && (
-          <select
-            className="run-agent-select"
-            aria-label="AI tool to launch"
-            value={selectedAgent ?? ""}
-            onChange={(e) => setPickedAgent(e.target.value)}
-          >
-            {runAgents.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-        )}
-        <a className="btn" href={runHref(tab, id, selectedAgent)}>
-          {selectedAgent ? `Run with ${selectedAgent}` : "Run in terminal"}
-        </a>
-        <button
-          type="button"
-          className="toggle"
-          disabled={busy}
-          aria-pressed={runnable}
-          onClick={toggleRunnable}
-          title={
-            runEnabled
-              ? runnable
-                ? "AI execution on: karamd run picks this task up"
-                : "Mark this task for AI execution by karamd run"
-              : "run is disabled in this vault (set run.enabled); the tag has no effect yet"
-          }
-        >
-          {runnable ? "🤖 AI-runnable ✓" : "🤖 AI-runnable"}
-        </button>
-      </div>
-      {canAssignPhase && (
-        <div
-          className="actions phase-assign"
-          role="group"
-          aria-label="Assign phase"
-        >
-          <span className="phase-assign-label">Assign phase:</span>
-          {assignablePhases.map((p) => (
+        <div className="run-split" ref={runSplitRef}>
+          <a className="btn run-split-main" href={runHref(tab, id, selectedAgent)}>
+            {selectedAgent ? `Run with ${selectedAgent}` : "Run in terminal"}
+          </a>
+          {runAgents.length > 1 && (
             <button
-              key={p.id}
               type="button"
-              disabled={busy}
-              onClick={() => phaseMutation.mutate(p.id)}
+              className="run-split-toggle"
+              aria-haspopup="menu"
+              aria-expanded={agentMenuOpen}
+              aria-label="Choose AI tool"
+              onClick={() => setAgentMenuOpen((o) => !o)}
             >
-              {p.name}
+              ▾
             </button>
-          ))}
+          )}
+          {agentMenuOpen && (
+            <ul className="run-split-menu" role="menu">
+              {runAgents.map((a) => (
+                <li key={a} role="none">
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={a === selectedAgent}
+                    onClick={() => chooseAgent(a)}
+                  >
+                    <span className="run-split-check" aria-hidden="true">
+                      {a === selectedAgent ? "✓" : ""}
+                    </span>
+                    {a}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-      )}
+        {canChangePhase && (
+          <div className="phase-split" ref={phaseSplitRef}>
+            <button
+              type="button"
+              className="phase-split-toggle"
+              aria-haspopup="menu"
+              aria-expanded={phaseMenuOpen}
+              aria-label="Change phase"
+              disabled={busy}
+              onClick={() => setPhaseMenuOpen((o) => !o)}
+            >
+              Phase: {currentPhaseName}{" "}
+              <span className="phase-split-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+            {phaseMenuOpen && (
+              <ul className="run-split-menu" role="menu">
+                {assignablePhases.map((p) => {
+                  const active = p.id === task.phase;
+                  return (
+                    <li key={p.id} role="none">
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        disabled={busy || active}
+                        onClick={() => phaseMutation.mutate(p.id)}
+                      >
+                        <span className="run-split-check" aria-hidden="true">
+                          {active ? "✓" : ""}
+                        </span>
+                        {p.name}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
       {runnable && !runEnabled && (
         <p className="muted run-hint">
           Tagged for AI execution, but <code>run</code> is disabled in this
@@ -324,7 +485,25 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
         <Field label="phase">{task.phase}</Field>
         <Field label="due">{task.due}</Field>
         <Field label="tags">
-          {task.tags.length > 0 ? task.tags.join(", ") : null}
+          <span className="tags-value">
+            {otherTags.length > 0 && <span>{otherTags.join(", ")}</span>}
+            <button
+              type="button"
+              className={`tag-toggle${runnable ? " on" : ""}`}
+              disabled={busy}
+              aria-pressed={runnable}
+              onClick={toggleRunnable}
+              title={
+                runEnabled
+                  ? runnable
+                    ? "AI execution on: karamd run picks this task up (click to remove)"
+                    : "Mark this task for AI execution by karamd run"
+                  : "run is disabled in this vault (set run.enabled); the tag has no effect yet"
+              }
+            >
+              {runnable ? "ai-runnable" : "+ai-runnable"}
+            </button>
+          </span>
         </Field>
         <Field label="dependencies">
           {task.dependencies.length > 0 ? depLinks : null}

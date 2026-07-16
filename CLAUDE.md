@@ -81,6 +81,14 @@ Split into a library crate (all logic, unit-testable) plus a thin binary:
   `open:` filter = status not terminal), `src/next.rs`
   (taskmd-parity ranking), `src/validate.rs` (spec lint), `src/analyze.rs`
   (`graph` DOT + `stats`), `src/output.rs` (one `TaskView` behind human/JSON/YAML).
+- Phase rescheduling (#057): `src/reschedule.rs` — `karamd reschedule` moves open
+  tasks between phases by their `due` date, per a custom ordered rule list in a
+  separate `.taskmd.reschedule.yaml` (`DEFAULT_RESCHEDULE_CONFIG`). Pure, tested
+  core: `Window::contains`, rule matching, `decide` (first match wins), `plan`,
+  and validation, all taking `today: NaiveDate`; `run_reschedule` is the thin
+  Vault I/O shell. Windows are named or numeric (`min_days`/`max_days`); moves
+  are authoritative both directions and idempotent (no write when already in the
+  target phase). Like `generate` it is safe to run unattended on cron.
 - Web (#009/#013): `src/web.rs` — axum JSON API over the library (`karamd web`,
   `--bind`/`--web-dir`/`--run-command`), served alongside the bun-built SPA in
   `web/`. Embedded terminal (#010): `src/terminal.rs` (pure prompt-seeding +

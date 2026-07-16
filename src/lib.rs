@@ -30,6 +30,7 @@ pub mod due;
 pub mod next;
 pub mod output;
 pub mod query;
+pub mod reschedule;
 pub mod rule;
 pub mod run;
 pub mod run_spawn;
@@ -43,6 +44,8 @@ pub mod web_terminal;
 
 /// Rules file used when `--config` is omitted, resolved relative to `--vault`.
 pub const DEFAULT_CONFIG: &str = ".taskmd.recurring.yaml";
+
+pub use reschedule::DEFAULT_RESCHEDULE_CONFIG;
 
 use output::Format;
 use rule::{Rule, Trigger};
@@ -334,6 +337,24 @@ enum Commands {
         dry_run: bool,
         #[command(flatten)]
         today: TodayArg,
+    },
+    /// Move open tasks between phases by their `due` date, per custom rules in
+    /// `.taskmd.reschedule.yaml`. Idempotent; safe to run on a cron schedule.
+    Reschedule {
+        /// Path to the taskmd project root (the dir holding .taskmd.yaml).
+        #[arg(long)]
+        vault: PathBuf,
+        /// Path to the reschedule-rules YAML file. Defaults to
+        /// `<vault>/.taskmd.reschedule.yaml`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Print the moves without writing.
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        today: TodayArg,
+        #[command(flatten)]
+        format: FormatArgs,
     },
     /// Serve the web UI (React SPA + JSON API) over the vault.
     Web {
@@ -928,12 +949,52 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Commands::Reschedule {
+            vault,
+            config,
+            dry_run,
+            today,
+            format,
+        } => {
+            let today = today.resolve();
+            let config = config.unwrap_or_else(|| vault.join(DEFAULT_RESCHEDULE_CONFIG));
+            let v = taskmd::Vault::open(&vault)?;
+            let report = reschedule::run_reschedule(&v, &config, today, dry_run)?;
+            match format.format() {
+                Format::Human => print_reschedule_human(&report, dry_run, &config),
+                Format::Json => println!("{}", output::to_json(&report)?),
+                Format::Yaml => println!("{}", output::to_yaml(&report)?),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Commands::Web {
             vault,
             bind,
             web_dir,
             run_command,
         } => web::serve_blocking(bind, vault.vault, web_dir, run_command),
+    }
+}
+
+/// Human-readable summary of a `reschedule` run.
+fn print_reschedule_human(report: &reschedule::RescheduleReport, dry_run: bool, config: &Path) {
+    match report.state {
+        reschedule::State::NoConfig => {
+            println!("karamd: no reschedule config at {}", config.display());
+        }
+        reschedule::State::Disabled => {
+            println!("karamd: reschedule disabled (enabled: false)");
+        }
+        reschedule::State::Ran if report.moved.is_empty() => {
+            println!("karamd: nothing to reschedule");
+        }
+        reschedule::State::Ran => {
+            let verb = if dry_run { "would move" } else { "moved" };
+            for m in &report.moved {
+                let from = m.from.as_deref().unwrap_or("no phase");
+                println!("karamd: {verb} {} ({from} -> {})", m.id, m.to);
+            }
+        }
     }
 }
 
@@ -1520,6 +1581,139 @@ mod tests {
                 .unwrap()
                 .contains("recurring: \"bday:2099\"")
         );
+    }
+
+    /// A vault with phases now/next/soon and one task file.
+    fn vault_with_phases_and_task(task_name: &str, frontmatter: &str) -> PathBuf {
+        let vault = tempdir();
+        fs::write(
+            vault.join(".taskmd.yaml"),
+            "dir: tasks\nphases:\n  - { id: now, name: Now }\n  - { id: next, name: Next }\n  - { id: soon, name: Soon }\n",
+        )
+        .unwrap();
+        fs::create_dir_all(vault.join("tasks")).unwrap();
+        fs::write(
+            vault.join("tasks").join(task_name),
+            format!("---\n{frontmatter}---\n\n# t\n"),
+        )
+        .unwrap();
+        vault
+    }
+
+    const RESCHED_RULES: &str = "rules:\n  - { due: today, phase: now }\n  - { due: this_week, phase: next }\n  - { due: next_week, phase: soon }\n";
+
+    #[test]
+    fn reschedule_cli_applies_moves() {
+        let vault = vault_with_phases_and_task(
+            "001-a.md",
+            "id: \"001\"\ntitle: a\nstatus: pending\nphase: later\ndue: 2026-07-15\n",
+        );
+        fs::write(vault.join(DEFAULT_RESCHEDULE_CONFIG), RESCHED_RULES).unwrap();
+        run([
+            "karamd".into(),
+            "reschedule".into(),
+            "--vault".into(),
+            vault.clone().into_os_string(),
+            "--today".into(),
+            "2026-07-15".into(),
+        ])
+        .unwrap();
+        assert!(
+            fs::read_to_string(vault.join("tasks/001-a.md"))
+                .unwrap()
+                .contains("phase: now")
+        );
+    }
+
+    #[test]
+    fn reschedule_cli_dry_run_and_machine_formats() {
+        let vault = vault_with_phases_and_task(
+            "001-a.md",
+            "id: \"001\"\ntitle: a\nstatus: pending\nphase: later\ndue: 2026-07-15\n",
+        );
+        let config = vault.join("resched.yaml");
+        fs::write(&config, RESCHED_RULES).unwrap();
+        // All dry-run so the file is untouched; covers the human "would move"
+        // branch plus the JSON and YAML format arms.
+        for extra in [
+            vec!["--dry-run"],
+            vec!["--dry-run", "--json"],
+            vec!["--dry-run", "--yaml"],
+        ] {
+            let mut args = vec![
+                "karamd".to_string(),
+                "reschedule".to_string(),
+                "--vault".to_string(),
+                vault.to_string_lossy().into_owned(),
+                "--config".to_string(),
+                config.to_string_lossy().into_owned(),
+                "--today".to_string(),
+                "2026-07-15".to_string(),
+            ];
+            args.extend(extra.into_iter().map(String::from));
+            run(args.into_iter().map(OsString::from)).unwrap();
+        }
+        // --dry-run ran first and must not have written.
+        assert!(
+            fs::read_to_string(vault.join("tasks/001-a.md"))
+                .unwrap()
+                .contains("phase: later")
+        );
+    }
+
+    #[test]
+    fn reschedule_cli_nothing_to_do() {
+        // Task already in the target phase -> "nothing to reschedule".
+        let vault = vault_with_phases_and_task(
+            "001-a.md",
+            "id: \"001\"\ntitle: a\nstatus: pending\nphase: now\ndue: 2026-07-15\n",
+        );
+        fs::write(vault.join(DEFAULT_RESCHEDULE_CONFIG), RESCHED_RULES).unwrap();
+        run([
+            "karamd".into(),
+            "reschedule".into(),
+            "--vault".into(),
+            vault.clone().into_os_string(),
+            "--today".into(),
+            "2026-07-15".into(),
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn reschedule_cli_missing_config_no_op() {
+        let vault = vault_with_phases_and_task(
+            "001-a.md",
+            "id: \"001\"\ntitle: a\nstatus: pending\ndue: 2026-07-15\n",
+        );
+        // No .taskmd.reschedule.yaml written: NoConfig branch.
+        run([
+            "karamd".into(),
+            "reschedule".into(),
+            "--vault".into(),
+            vault.clone().into_os_string(),
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn reschedule_cli_disabled_no_op() {
+        let vault = vault_with_phases_and_task(
+            "001-a.md",
+            "id: \"001\"\ntitle: a\nstatus: pending\ndue: 2026-07-15\n",
+        );
+        fs::write(
+            vault.join(DEFAULT_RESCHEDULE_CONFIG),
+            format!("enabled: false\n{RESCHED_RULES}"),
+        )
+        .unwrap();
+        run([
+            "karamd".into(),
+            "reschedule".into(),
+            "--vault".into(),
+            vault.clone().into_os_string(),
+        ])
+        .unwrap();
     }
 
     #[test]

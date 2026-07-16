@@ -1,0 +1,33 @@
+# karamd reschedule rules. Copy to <vault>/.taskmd.reschedule.yaml (the default
+# --config location) and edit. `karamd reschedule` moves open tasks between
+# phases by their `due` date. Idempotent and safe on a cron schedule: it only
+# ever changes a task's `phase`, never its due date or anything else.
+#
+# Rules are evaluated top to bottom; the FIRST rule whose window contains a
+# task's due date wins. Only open (non-terminal) tasks with a `due` date are
+# considered; a task matching no rule is left untouched. The move is
+# authoritative in both directions (a task can be pushed later as well as
+# pulled forward), so the phase always reflects the current due date.
+#
+# Set `enabled: false` to pause without deleting the file.
+
+enabled: true
+rules:
+  # Named windows, matched against the due date relative to today:
+  #   overdue    due before today
+  #   today      due today
+  #   this_week  due in the same ISO week as today
+  #   next_week  due in the ISO week after today's
+  #   this_month due in the same calendar month
+  #   next_month due in the next calendar month
+  - { due: today, phase: now }
+  - { due: this_week, phase: next }
+  - { due: next_week, phase: soon }
+
+  # Numeric ranges are the alternative to a named window (use one or the other,
+  # never both in the same rule). `min_days`/`max_days` bound the signed offset
+  # `(due - today)` in days, inclusive; an omitted side is open-ended.
+  # `max_days: 0` also catches overdue tasks. Example (commented out):
+  # - { max_days: 0, phase: now }        # overdue or due today
+  # - { min_days: 1, max_days: 14, phase: next }
+  # - { min_days: 15, phase: later }     # more than two weeks out
