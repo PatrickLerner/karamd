@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-16
+
+### Added
+
+- New `karamd reschedule` command: move open tasks between phases by their `due`
+  date, driven by a custom, ordered rule list in `.taskmd.reschedule.yaml`
+  (default `--config` location). Windows are named (`today`, `this_week`,
+  `next_week`, `this_month`, `next_month`, `overdue`) or numeric day ranges
+  (`min_days`/`max_days`); the first matching rule wins. Idempotent and safe on a
+  cron schedule; `--dry-run`, `--today`, and `--json`/`--yaml` supported. See
+  `reschedule.example.yaml` (#057).
+- Web UI task detail: the **phase** and **status** actions are now compact
+  dropdowns (styled like the run switcher), and the **AI-runnable** toggle moved
+  inline into the tags row (`+ai-runnable`) (#054, #055, #056).
+
 ## [0.9.0] - 2026-07-15
 
 ### Added
