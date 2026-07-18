@@ -7,7 +7,7 @@
     {
       "name": "karamd-formats",
       "source": "./",
-      "description": "Skills documenting the taskmd task-file format, the karamd .taskmd.recurring.yaml recurring-rules config, and the karamd CLI (usage + idempotency contract).",
+      "description": "Skills documenting the taskmd task-file format, the karamd .taskmd.recurring.yaml recurring-rules config, the karamd CLI (usage + idempotency contract), and how to file tasks with it.",
       "category": "productivity",
       "keywords": ["taskmd", "karamd", "tasks", "markdown", "recurring"]
     }

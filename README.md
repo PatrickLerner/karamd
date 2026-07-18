@@ -12,15 +12,17 @@ one day, not yet.
 ## Claude Code skills
 
 This repo doubles as a Claude Code plugin marketplace. It ships one plugin,
-`karamd-formats`, with three skills documenting the formats so any Claude
-session can read, write, and validate a vault and author recurring rules
-without rediscovering them:
+`karamd-formats`, with four skills documenting the formats and workflow so any
+Claude session can read, write, and validate a vault, file tasks, and author
+recurring rules without rediscovering them:
 
 - `taskmd-format`: the taskmd task-file format. Frontmatter fields and enums,
   id strategies, slug/filename rules, `.taskmd.yaml` config, validation.
 - `karamd-recurring`: the `.taskmd.recurring.yaml` rules config. The three
   triggers, optional `body`, and the dedup markers karamd stamps.
 - `karamd-cli`: karamd CLI usage and its idempotency contract.
+- `filing-tasks`: how to file a task or follow-up with `karamd create` — the
+  flags that matter and the state verbs, keyed to auto-load on filing intent.
 
 Install from Claude Code:
 
@@ -42,7 +44,7 @@ and the taskmd spec. When the taskmd spec version changes (regenerate with
 
 ### opencode
 
-The same three `skills/<name>/SKILL.md` files are valid
+The same four `skills/<name>/SKILL.md` files are valid
 [opencode skills](https://opencode.ai/docs/skills/) unchanged — the format is
 identical (`SKILL.md` + `name`/`description` frontmatter, loaded on demand).
 opencode does not read Claude plugin marketplaces, so expose them through one of
@@ -52,7 +54,7 @@ in `opencode debug skill` but is not handed to the agent's `skill` tool):
 
 ```sh
 mkdir -p ~/.config/opencode/skills
-for s in karamd-cli karamd-recurring taskmd-format; do
+for s in karamd-cli karamd-recurring taskmd-format filing-tasks; do
   ln -sfn "$PWD/skills/$s" ~/.config/opencode/skills/"$s"
 done
 ```
@@ -64,7 +66,7 @@ no copies to sync. Verify the agent actually sees them (not just discovery):
 opencode run 'List the names of every skill available to you.'
 ```
 
-The three names must appear. `opencode run` starts a fresh server each time, so
+The four names must appear. `opencode run` starts a fresh server each time, so
 it reflects changes immediately.
 
 **Gotcha:** the opencode TUI runs a per-project server that scans skills **once

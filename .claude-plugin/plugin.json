@@ -1,7 +1,7 @@
 {
   "name": "karamd-formats",
-  "description": "Skills documenting the taskmd task-file format, the karamd .taskmd.recurring.yaml rules config, and the karamd CLI, so any Claude session can read, write, and validate a taskmd vault correctly.",
-  "version": "0.3.0",
+  "description": "Skills documenting the taskmd task-file format, the karamd .taskmd.recurring.yaml rules config, the karamd CLI, and how to file tasks with it, so any Claude session can read, write, validate, and add to a taskmd vault correctly.",
+  "version": "0.4.0",
   "author": {
     "name": "Patrick Lerner"
   },
