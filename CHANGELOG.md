@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- New `karamd postpone <id>` command and a **→ tomorrow** button next to the due
+  date in the web task detail (shown on open tasks due today or earlier). Both
+  set `due` to tomorrow and move the task to the phase the
+  `.taskmd.reschedule.yaml` rules pick for that date; with no matching rule or
+  no config, only `due` changes.
+
 ## [0.10.0] - 2026-07-16
 
 ### Added

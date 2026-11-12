@@ -413,6 +413,23 @@ async fn set_status(
     Ok(Json(DetailOut::from(&view)).into_response())
 }
 
+/// POST /api/tasks/{id}/postpone — due to tomorrow, phase per the reschedule rules.
+async fn postpone_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> std::result::Result<Response, ApiError> {
+    let vault = Vault::open(&state.root)?;
+    crate::reschedule::postpone_task(
+        &vault,
+        &state.root.join(crate::DEFAULT_RESCHEDULE_CONFIG),
+        &id,
+        Local::now().date_naive(),
+    )?;
+    let mut view = verbs::show(&state.root, &id)?;
+    clear_stale_run(&mut view, vault.config.run.timeout_secs);
+    Ok(Json(DetailOut::from(&view)).into_response())
+}
+
 /// Cap on the per-run log tail returned to the web log view (#046).
 const RUN_LOG_TAIL_BYTES: usize = 64 * 1024;
 
@@ -677,6 +694,7 @@ fn app(root: PathBuf, web_dir: PathBuf, run_command: String) -> Router {
         .route("/api/tasks", get(list_tasks).post(create_task))
         .route("/api/tasks/{id}", get(get_task).patch(patch_task))
         .route("/api/tasks/{id}/status", post(set_status))
+        .route("/api/tasks/{id}/postpone", post(postpone_task))
         .route("/api/tasks/{id}/run", get(crate::web_terminal::run_handler))
         .route("/api/sessions", get(crate::web_terminal::list_sessions))
         .route(
@@ -1038,6 +1056,39 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "blocked");
         assert!(body["ai_status"].is_null());
+    }
+
+    #[tokio::test]
+    async fn postpone_moves_due_and_phase() {
+        let root = tempdir();
+        fs::write(
+            root.join(".taskmd.yaml"),
+            "dir: tasks\nphases:\n  - { id: now, name: Now }\n  - { id: soon, name: Soon }\n",
+        )
+        .unwrap();
+        // Any date from tomorrow on lands in `soon`, so the test is clock-independent.
+        fs::write(
+            root.join(".taskmd.reschedule.yaml"),
+            "rules:\n  - { min_days: 1, phase: soon }\n",
+        )
+        .unwrap();
+        write_task(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: T\nstatus: pending\nphase: now\ndue: 2020-01-01\n---\n\n# T\n",
+        );
+        let req = json_req("POST", "/api/tasks/001/postpone", serde_json::json!({}));
+        let (status, body) = call(&root, req).await;
+        assert_eq!(status, StatusCode::OK);
+        let tomorrow = (Local::now().date_naive() + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(body["due"], tomorrow);
+        assert_eq!(body["phase"], "soon");
+
+        let req = json_req("POST", "/api/tasks/404/postpone", serde_json::json!({}));
+        let (status, _) = call(&root, req).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

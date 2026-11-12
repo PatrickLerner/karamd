@@ -240,23 +240,13 @@ pub fn run_reschedule(
     today: NaiveDate,
     dry_run: bool,
 ) -> Result<RescheduleReport> {
-    if !config_path.exists() {
+    let (state, rules) = load_active_rules(vault, config_path)?;
+    if state != State::Ran {
         return Ok(RescheduleReport {
-            state: State::NoConfig,
+            state,
             ..Default::default()
         });
     }
-    let raw = std::fs::read_to_string(config_path)
-        .with_context(|| format!("reading reschedule config {}", config_path.display()))?;
-    let cfg = load_reschedule_config(&raw)?;
-    if !cfg.enabled {
-        return Ok(RescheduleReport {
-            state: State::Disabled,
-            ..Default::default()
-        });
-    }
-    let valid_phases: HashSet<&str> = vault.config.phases.iter().map(|p| p.key()).collect();
-    cfg.validate(&valid_phases)?;
 
     let scan = vault.scan()?;
     let considered = scan
@@ -264,7 +254,7 @@ pub fn run_reschedule(
         .iter()
         .filter(|t| !t.effective_status().is_terminal() && t.due().is_some())
         .count();
-    let moved = plan(&scan.tasks, &cfg.rules, today);
+    let moved = plan(&scan.tasks, &rules, today);
     if !dry_run {
         for m in &moved {
             let to = m.to.clone();
@@ -279,6 +269,48 @@ pub fn run_reschedule(
         state: State::Ran,
         moved,
         considered,
+    })
+}
+
+/// Read and validate the rules at `config_path`. Rules are empty unless the
+/// state is [`State::Ran`] (file present and enabled).
+fn load_active_rules(vault: &Vault, config_path: &Path) -> Result<(State, Vec<RescheduleRule>)> {
+    if !config_path.exists() {
+        return Ok((State::NoConfig, Vec::new()));
+    }
+    let raw = std::fs::read_to_string(config_path)
+        .with_context(|| format!("reading reschedule config {}", config_path.display()))?;
+    let cfg = load_reschedule_config(&raw)?;
+    if !cfg.enabled {
+        return Ok((State::Disabled, Vec::new()));
+    }
+    let valid_phases: HashSet<&str> = vault.config.phases.iter().map(|p| p.key()).collect();
+    cfg.validate(&valid_phases)?;
+    Ok((State::Ran, cfg.rules))
+}
+
+/// Set `due` to the day after `today` and move the task to the phase the rules
+/// pick for that date. No matching rule leaves the phase alone.
+pub fn postpone(task: &mut Task, today: NaiveDate, rules: &[RescheduleRule]) {
+    let due = today + Duration::days(1);
+    task.set_due(Some(&due.format("%Y-%m-%d").to_string()));
+    if let Some(phase) = decide(due, today, rules) {
+        task.set_phase(Some(phase));
+    }
+}
+
+/// [`postpone`] task `id` in the vault, using the rules at `config_path`
+/// (missing or disabled config: only `due` changes).
+pub fn postpone_task(
+    vault: &Vault,
+    config_path: &Path,
+    id: &str,
+    today: NaiveDate,
+) -> Result<Task> {
+    let (_, rules) = load_active_rules(vault, config_path)?;
+    vault.update(id, &mut |t: &mut Task| {
+        postpone(t, today, &rules);
+        Ok(())
     })
 }
 
@@ -696,5 +728,45 @@ mod tests {
         let vault = Vault::open(&root).unwrap();
         let err = run_reschedule(&vault, &cfg, d(2026, 7, 15), false).unwrap_err();
         assert!(err.to_string().contains("reading reschedule config"));
+    }
+    #[test]
+    fn postpone_sets_tomorrow_and_rephases() {
+        let rules = load_reschedule_config(EXAMPLE_RULES).unwrap().rules;
+        // Wednesday: tomorrow is this week.
+        let mut t = task("id: \"001\"\ntitle: a\nstatus: pending\nphase: now\ndue: 2026-07-15\n");
+        postpone(&mut t, d(2026, 7, 15), &rules);
+        assert_eq!(t.due(), Some(d(2026, 7, 16)));
+        assert_eq!(t.phase().as_deref(), Some("next"));
+        // Sunday: tomorrow is next week.
+        postpone(&mut t, d(2026, 7, 19), &rules);
+        assert_eq!(t.due(), Some(d(2026, 7, 20)));
+        assert_eq!(t.phase().as_deref(), Some("soon"));
+    }
+
+    #[test]
+    fn postpone_without_matching_rule_keeps_phase() {
+        let mut t = task("id: \"001\"\ntitle: a\nstatus: pending\nphase: now\ndue: 2026-07-10\n");
+        postpone(&mut t, d(2026, 7, 15), &[]);
+        assert_eq!(t.due(), Some(d(2026, 7, 16)));
+        assert_eq!(t.phase().as_deref(), Some("now"));
+    }
+
+    #[test]
+    fn postpone_task_writes_and_tolerates_missing_config() {
+        let root = vault_with(&[(
+            "001-a.md",
+            "id: \"001\"\ntitle: a\nstatus: pending\nphase: now\ndue: 2026-07-15\n",
+        )]);
+        let vault = Vault::open(&root).unwrap();
+        let cfg = root.join(".taskmd.reschedule.yaml");
+
+        let t = postpone_task(&vault, &cfg, "001", d(2026, 7, 15)).unwrap();
+        assert_eq!(t.phase().as_deref(), Some("now"));
+
+        std::fs::write(&cfg, EXAMPLE_RULES).unwrap();
+        postpone_task(&vault, &cfg, "001", d(2026, 7, 15)).unwrap();
+        let body = std::fs::read_to_string(root.join("tasks/001-a.md")).unwrap();
+        assert!(body.contains("due: 2026-07-16"), "{body}");
+        assert!(body.contains("phase: next"), "{body}");
     }
 }

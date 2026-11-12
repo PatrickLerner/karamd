@@ -242,6 +242,22 @@ enum Commands {
         #[command(flatten)]
         format: FormatArgs,
     },
+    /// Set a task's due date to tomorrow and move it to the phase the
+    /// reschedule rules pick for that date (no matching rule: phase unchanged).
+    Postpone {
+        /// Task id.
+        id: String,
+        #[command(flatten)]
+        vault: VaultArg,
+        /// Path to the reschedule-rules YAML file. Defaults to
+        /// `<vault>/.taskmd.reschedule.yaml`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[command(flatten)]
+        today: TodayArg,
+        #[command(flatten)]
+        format: FormatArgs,
+    },
     /// Reopen a task (back to pending; clears terminal timestamps).
     Reopen {
         /// Task id.
@@ -793,6 +809,26 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
         } => {
             let view = verbs::set_status(&vault.vault, &id, Status::Cancelled, today.resolve())?;
             let human = format!("karamd: {} -> cancelled", view.id);
+            print_task(format.format(), &view, human)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Commands::Postpone {
+            id,
+            vault,
+            config,
+            today,
+            format,
+        } => {
+            let config = config.unwrap_or_else(|| vault.vault.join(DEFAULT_RESCHEDULE_CONFIG));
+            let v = taskmd::Vault::open(&vault.vault)?;
+            reschedule::postpone_task(&v, &config, &id, today.resolve())?;
+            let view = verbs::show(&vault.vault, &id)?;
+            let human = format!(
+                "karamd: {} -> due {}, phase {}",
+                view.id,
+                view.due.as_deref().unwrap_or("-"),
+                view.phase.as_deref().unwrap_or("none"),
+            );
             print_task(format.format(), &view, human)?;
             Ok(ExitCode::SUCCESS)
         }
@@ -1601,6 +1637,31 @@ mod tests {
     }
 
     const RESCHED_RULES: &str = "rules:\n  - { due: today, phase: now }\n  - { due: this_week, phase: next }\n  - { due: next_week, phase: soon }\n";
+
+    #[test]
+    fn postpone_cli_sets_tomorrow_and_phase() {
+        let vault = vault_with_phases_and_task(
+            "001-a.md",
+            "id: \"001\"\ntitle: a\nstatus: pending\nphase: now\ndue: 2026-07-15\n",
+        );
+        fs::write(vault.join(DEFAULT_RESCHEDULE_CONFIG), RESCHED_RULES).unwrap();
+        for fmt in [None, Some("--json")] {
+            let mut args: Vec<std::ffi::OsString> = vec![
+                "karamd".into(),
+                "postpone".into(),
+                "001".into(),
+                "--vault".into(),
+                vault.clone().into_os_string(),
+                "--today".into(),
+                "2026-07-15".into(),
+            ];
+            args.extend(fmt.map(Into::into));
+            run(args).unwrap();
+        }
+        let body = fs::read_to_string(vault.join("tasks/001-a.md")).unwrap();
+        assert!(body.contains("due: 2026-07-16"), "{body}");
+        assert!(body.contains("phase: next"), "{body}");
+    }
 
     #[test]
     fn reschedule_cli_applies_moves() {

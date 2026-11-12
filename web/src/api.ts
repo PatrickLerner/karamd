@@ -65,6 +65,11 @@ export const api = {
       `/tasks/${encodeURIComponent(id)}/status`,
       jsonInit("POST", { status }),
     ),
+  postpone: (id: string): Promise<TaskDetail> =>
+    request(
+      `/tasks/${encodeURIComponent(id)}/postpone`,
+      jsonInit("POST", {}),
+    ),
   config: (): Promise<Config> => request("/config"),
   next: (limit = 5): Promise<NextItem[]> => request(`/next?limit=${limit}`),
   rules: (): Promise<RulesResponse> => request("/rules"),

@@ -71,6 +71,13 @@ function bodyWithoutTitle(body: string, title: string): string {
   return body;
 }
 
+// Browser-local YYYY-MM-DD, comparable to `due` as a string.
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   if (children === null || children === undefined || children === "")
     return null;
@@ -225,12 +232,26 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
   });
 
   const task = taskQ.data ?? null;
+  const postponeMutation = useMutation({
+    mutationFn: () => api.postpone(id),
+    onMutate: () => setDismissed(false),
+    onSuccess: (updated: Task) => {
+      queryClient.setQueryData(["task", id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["next"] });
+    },
+  });
+
   const busy =
-    mutation.isPending || tagMutation.isPending || phaseMutation.isPending;
+    mutation.isPending ||
+    tagMutation.isPending ||
+    phaseMutation.isPending ||
+    postponeMutation.isPending;
   const errorSource =
     mutation.error ??
     tagMutation.error ??
     phaseMutation.error ??
+    postponeMutation.error ??
     (task === null ? taskQ.error : null);
   const error = dismissed ? null : errorSource ? errorMessage(errorSource) : null;
   const apply = (to: Status) => mutation.mutate(to);
@@ -483,7 +504,24 @@ export function Detail({ id, tab }: { id: string; tab: string }) {
         <Field label="effort">{task.effort}</Field>
         <Field label="type">{task.type}</Field>
         <Field label="phase">{task.phase}</Field>
-        <Field label="due">{task.due}</Field>
+        <Field label="due">
+          {task.due ? (
+            <span className="tags-value">
+              <span>{task.due}</span>
+              {!isTerminal(task.status) && task.due <= localToday() && (
+                <button
+                  type="button"
+                  className="tag-toggle"
+                  disabled={busy}
+                  onClick={() => postponeMutation.mutate()}
+                  title="Set due to tomorrow and move to the phase the reschedule rules pick"
+                >
+                  → tomorrow
+                </button>
+              )}
+            </span>
+          ) : null}
+        </Field>
         <Field label="tags">
           <span className="tags-value">
             {otherTags.length > 0 && <span>{otherTags.join(", ")}</span>}

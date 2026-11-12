@@ -89,6 +89,8 @@ Split into a library crate (all logic, unit-testable) plus a thin binary:
   Vault I/O shell. Windows are named or numeric (`min_days`/`max_days`); moves
   are authoritative both directions and idempotent (no write when already in the
   target phase). Like `generate` it is safe to run unattended on cron.
+  `postpone` (CLI verb + web `POST /api/tasks/{id}/postpone`) sets `due` to
+  tomorrow and re-phases the task through the same rules (`decide`).
 - Web (#009/#013): `src/web.rs` — axum JSON API over the library (`karamd web`,
   `--bind`/`--web-dir`/`--run-command`), served alongside the bun-built SPA in
   `web/`. Embedded terminal (#010): `src/terminal.rs` (pure prompt-seeding +
