@@ -1,6 +1,6 @@
 ---
 name: karamd-cli
-description: karamd CLI usage and its idempotency contract: the generate command and its flags, the task verbs (create/list/show/complete/cancel/reopen/postpone/status/next/validate/web), the query grammar, and machine output. Use when running karamd, scripting it, or explaining what a karamd command does or guarantees.
+description: karamd CLI usage and its idempotency contract: the generate command and its flags, the task verbs (create/list/show/complete/cancel/reopen/postpone/status/config/terminal-argv/next/validate/web), the query grammar, and machine output. Use when running karamd, scripting it, or explaining what a karamd command does or guarantees.
 ---
 
 # karamd CLI
@@ -49,6 +49,8 @@ karamd cancel 013
 karamd reopen 013                            # back to pending, timestamps cleared
 karamd postpone 015                          # due -> tomorrow, phase per reschedule rules
 karamd status 014 in-progress                # any of the six statuses
+karamd config                                # phases, Today grouping, workflow, agents
+karamd terminal-argv 012 [--agent NAME]      # argv for an interactive agent session
 karamd next
 karamd validate
 karamd web
@@ -64,6 +66,9 @@ karamd web
 - `postpone` sets `due` to tomorrow and moves the task to the phase the
   `.taskmd.reschedule.yaml` rules pick for that date (`--config` overrides the
   path). No matching rule or no config: only `due` changes.
+- `config --json` has the same shape as `GET /api/config`. `terminal-argv
+  --json` prints `{argv, cwd}`: run `argv` in `cwd` to start the session the web
+  terminal would (task prompt seeded; `--agent` picks a `run.agents` entry).
 - The full status enum for `status`: `pending`, `in-progress`, `in-review`,
   `completed`, `blocked`, `cancelled`.
 

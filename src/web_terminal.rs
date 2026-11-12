@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::taskmd::Vault;
-use crate::terminal::{Scrollback, launch_argv, parse_command, seed_prompt, with_seeded_prompt};
+use crate::terminal::{Scrollback, resolve_launch, seed_prompt, with_seeded_prompt};
 use crate::web::{ApiError, AppState};
 
 /// Control messages the client may send as text frames.
@@ -342,8 +342,11 @@ pub(crate) async fn run_handler(
     let task = vault.find(&id)?;
     let title = task.title().to_string();
     let prompt = seed_prompt(&task);
-    let (argv, prompt_flag) =
-        resolve_launch_argv(&vault, params.agent.as_deref(), &state.run_command)?;
+    let (argv, prompt_flag) = resolve_launch(
+        &vault.config.run,
+        params.agent.as_deref(),
+        &state.run_command,
+    )?;
     let spec = LaunchSpec {
         agent: params.agent.clone(),
         argv,
@@ -359,34 +362,6 @@ pub(crate) async fn run_handler(
             Err(e) => close_with_error(&mut socket, &e).await,
         }
     }))
-}
-
-/// Resolve the terminal launch argv **plus how to seed the prompt**: a named
-/// `run.agents` entry (with headless placeholders stripped, since the terminal is
-/// interactive) when `agent` is given, else the plain `--run-command`. Returns
-/// `(argv, prompt_flag)` where `prompt_flag` is the agent's
-/// `terminal_prompt_flag` (opencode's `--prompt`, #051), or `None` for a bare
-/// positional (claude and the legacy run-command path). An unknown agent name is
-/// a client error, never an arbitrary command.
-fn resolve_launch_argv(
-    vault: &Vault,
-    agent: Option<&str>,
-    run_command: &str,
-) -> std::result::Result<(Vec<String>, Option<String>), ApiError> {
-    match agent {
-        Some(name) => {
-            let spec = vault.config.run.agents.get(name).ok_or_else(|| {
-                ApiError::bad_request(format!(
-                    "unknown agent `{name}` (not configured in run.agents)"
-                ))
-            })?;
-            Ok((
-                launch_argv(&spec.command),
-                spec.terminal_prompt_flag.clone(),
-            ))
-        }
-        None => Ok((parse_command(run_command), None)),
-    }
 }
 
 /// Stream one attached socket: replay scrollback, then relay live events and

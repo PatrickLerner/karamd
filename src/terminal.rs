@@ -7,7 +7,9 @@
 
 use std::collections::VecDeque;
 
-use crate::taskmd::Task;
+use anyhow::{Result, anyhow, bail};
+
+use crate::taskmd::{RunConfig, Task};
 
 /// A byte ring buffer holding the most recent terminal output so a client that
 /// (re)attaches to a running session can replay what it missed. Capped by byte
@@ -150,6 +152,65 @@ pub fn parse_command(cmd: &str) -> Vec<String> {
     argv
 }
 
+/// The interactive launch argv and its prompt flag: the named `run.agents`
+/// entry when `agent` is given, else the plain `run_command`. An unknown agent
+/// is an error, never an arbitrary command.
+pub fn resolve_launch(
+    run: &RunConfig,
+    agent: Option<&str>,
+    run_command: &str,
+) -> Result<(Vec<String>, Option<String>)> {
+    match agent {
+        Some(name) => {
+            let spec = run
+                .agents
+                .get(name)
+                .ok_or_else(|| anyhow!("unknown agent `{name}` (not configured in run.agents)"))?;
+            Ok((
+                launch_argv(&spec.command),
+                spec.terminal_prompt_flag.clone(),
+            ))
+        }
+        None => Ok((parse_command(run_command), None)),
+    }
+}
+
+/// The full argv that starts an interactive agent session on `task`, with the
+/// task prompt seeded (`karamd terminal-argv`).
+pub fn task_argv(
+    run: &RunConfig,
+    task: &Task,
+    agent: Option<&str>,
+    run_command: &str,
+) -> Result<Vec<String>> {
+    let (argv, flag) = resolve_launch(run, agent, run_command)?;
+    if argv.is_empty() {
+        bail!("the launch command is empty");
+    }
+    Ok(with_seeded_prompt(
+        argv,
+        &seed_prompt(task),
+        flag.as_deref(),
+    ))
+}
+
+/// POSIX-shell quote an argv for copy-paste; plain words stay bare.
+pub fn shell_join(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            let plain = !a.is_empty()
+                && a.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_./=:@,+%".contains(c));
+            if plain {
+                a.clone()
+            } else {
+                format!("'{}'", a.replace('\'', r"'\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +325,26 @@ mod tests {
         assert!(sb.is_empty());
         assert_eq!(sb.len(), 0);
         assert_eq!(sb.snapshot(), b"");
+    }
+
+    #[test]
+    fn task_argv_seeds_the_run_command() {
+        let t = task("id: \"7\"\ntitle: Fix", "");
+        let run = RunConfig::default();
+        assert_eq!(
+            task_argv(&run, &t, None, "claude --x").unwrap(),
+            vec!["claude", "--x", "Work on task 7: Fix"]
+        );
+        assert!(task_argv(&run, &t, None, "  ").is_err());
+        let err = task_argv(&run, &t, Some("nope"), "claude").unwrap_err();
+        assert!(err.to_string().contains("unknown agent `nope`"), "{err}");
+    }
+
+    #[test]
+    fn shell_join_quotes_only_when_needed() {
+        let argv: Vec<String> = ["claude", "--flag=a/b", "", "it's done"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(shell_join(&argv), r"claude --flag=a/b '' 'it'\''s done'");
     }
 }

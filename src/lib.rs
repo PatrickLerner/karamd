@@ -258,6 +258,31 @@ enum Commands {
         #[command(flatten)]
         format: FormatArgs,
     },
+    /// Show the vault config a client needs: phases, the Today grouping, the
+    /// workflow and the configured agents (same shape as `GET /api/config`).
+    Config {
+        #[command(flatten)]
+        vault: VaultArg,
+        #[command(flatten)]
+        format: FormatArgs,
+    },
+    /// Print the argv that starts an interactive agent session on a task, with
+    /// the task prompt seeded (what the web terminal spawns). Run it with the
+    /// vault as working directory.
+    TerminalArgv {
+        /// Task id.
+        id: String,
+        #[command(flatten)]
+        vault: VaultArg,
+        /// A `run.agents` entry to launch. Omitted: `--run-command`.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Command to launch when no `--agent` is given.
+        #[arg(long, env = "KARAMD_RUN_COMMAND", default_value = "claude")]
+        run_command: String,
+        #[command(flatten)]
+        format: FormatArgs,
+    },
     /// Reopen a task (back to pending; clears terminal timestamps).
     Reopen {
         /// Task id.
@@ -387,6 +412,13 @@ enum Commands {
         #[arg(long, env = "KARAMD_RUN_COMMAND", default_value = "claude")]
         run_command: String,
     },
+}
+
+/// `karamd terminal-argv --json`: the argv plus the directory to run it in.
+#[derive(serde::Serialize)]
+struct TerminalArgvOut {
+    argv: Vec<String>,
+    cwd: PathBuf,
 }
 
 /// Render a single task result for the mutating/detail verbs.
@@ -830,6 +862,46 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
                 view.phase.as_deref().unwrap_or("none"),
             );
             print_task(format.format(), &view, human)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Commands::Config { vault, format } => {
+            let view = verbs::config(&vault.vault)?;
+            match format.format() {
+                Format::Human => {
+                    println!("workflow: {}", view.workflow);
+                    for p in &view.phases {
+                        let id = p.id.as_deref().unwrap_or(&p.name);
+                        let today = if view.today.iter().any(|t| t == id) {
+                            "  (today)"
+                        } else {
+                            ""
+                        };
+                        println!("{id}  {}{today}", p.name);
+                    }
+                }
+                Format::Json => println!("{}", output::to_json(&view)?),
+                Format::Yaml => println!("{}", output::to_yaml(&view)?),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Commands::TerminalArgv {
+            id,
+            vault,
+            agent,
+            run_command,
+            format,
+        } => {
+            let v = taskmd::Vault::open(&vault.vault)?;
+            let task = v.find(&id)?;
+            let out = TerminalArgvOut {
+                argv: terminal::task_argv(&v.config.run, &task, agent.as_deref(), &run_command)?,
+                cwd: v.root.clone(),
+            };
+            match format.format() {
+                Format::Human => println!("{}", terminal::shell_join(&out.argv)),
+                Format::Json => println!("{}", output::to_json(&out)?),
+                Format::Yaml => println!("{}", output::to_yaml(&out)?),
+            }
             Ok(ExitCode::SUCCESS)
         }
         Commands::Reopen {
@@ -1637,6 +1709,59 @@ mod tests {
     }
 
     const RESCHED_RULES: &str = "rules:\n  - { due: today, phase: now }\n  - { due: this_week, phase: next }\n  - { due: next_week, phase: soon }\n";
+
+    #[test]
+    fn config_cli_prints_all_formats() {
+        let vault = vault_with_phases_and_task("001-a.md", "id: \"001\"\ntitle: a\n");
+        for fmt in [None, Some("--json"), Some("--yaml")] {
+            let mut args: Vec<std::ffi::OsString> = vec![
+                "karamd".into(),
+                "config".into(),
+                "--vault".into(),
+                vault.clone().into_os_string(),
+            ];
+            args.extend(fmt.map(Into::into));
+            run(args).unwrap();
+        }
+        // A phase without an id is keyed by its name.
+        fs::write(vault.join(".taskmd.yaml"), "phases:\n  - name: Plain\n").unwrap();
+        run(["karamd", "config", "--vault", vault.to_str().unwrap()]).unwrap();
+    }
+
+    #[test]
+    fn terminal_argv_cli_prints_all_formats() {
+        let vault = vault_with_phases_and_task("001-a.md", "id: \"001\"\ntitle: a\n");
+        fs::write(
+        vault.join(".taskmd.yaml"),
+        "dir: tasks\nrun:\n  agents:\n    opencode:\n      command: [opencode, run]\n      terminal_prompt_flag: --prompt\n",
+    )
+    .unwrap();
+        for extra in [
+            vec![],
+            vec!["--json"],
+            vec!["--yaml", "--agent", "opencode"],
+        ] {
+            let mut args = vec![
+                "karamd",
+                "terminal-argv",
+                "001",
+                "--vault",
+                vault.to_str().unwrap(),
+            ];
+            args.extend(extra);
+            run(args).unwrap();
+        }
+        assert!(
+            run([
+                "karamd",
+                "terminal-argv",
+                "404",
+                "--vault",
+                vault.to_str().unwrap()
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn postpone_cli_sets_tomorrow_and_phase() {

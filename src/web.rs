@@ -72,17 +72,6 @@ pub(crate) struct ApiError {
     message: String,
 }
 
-impl ApiError {
-    /// A 400 with an explicit message (used by [`crate::web_terminal`] for an
-    /// unknown agent name).
-    pub(crate) fn bad_request(message: impl Into<String>) -> ApiError {
-        ApiError {
-            status: StatusCode::BAD_REQUEST,
-            message: message.into(),
-        }
-    }
-}
-
 #[derive(Serialize)]
 struct ErrorBody {
     error: String,
@@ -204,37 +193,6 @@ struct InvalidOut {
 struct TasksResponse {
     tasks: Vec<SummaryOut>,
     invalid: Vec<InvalidOut>,
-}
-
-#[derive(Serialize)]
-struct PhaseOut {
-    id: Option<String>,
-    name: String,
-    description: Option<String>,
-    due: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ConfigOut {
-    phases: Vec<PhaseOut>,
-    workflow: String,
-    /// Phase ids the web "Today" tab merges, in render order (config-driven,
-    /// with a default when `web.today` is unset).
-    today: Vec<String>,
-    /// Whether `run.enabled` is set (#043): the `ai-runnable` tag is inert
-    /// unless this is true, so the web toggle annotates itself when it is off.
-    run_enabled: bool,
-    /// `run.max_attempts` (#044): the denominator for the "n/max attempts" the
-    /// web shows on ai-runnable tasks, so a parked task is obvious at a glance.
-    run_max_attempts: u32,
-    /// Configured `run.agents` names (#047): the launchable tools the embedded
-    /// terminal can start. Empty falls the frontend back to the default
-    /// "Run with Claude" button (the `--run-command`).
-    run_agents: Vec<String>,
-    /// `run.agent` (#047): the default agent the terminal picker preselects.
-    run_default_agent: String,
-    /// karamd's own version (from `CARGO_PKG_VERSION`), shown in the web header.
-    version: String,
 }
 
 #[derive(Serialize)]
@@ -487,35 +445,7 @@ async fn cancel_run(
 
 /// GET /api/config — phases (for grouping) and the completion workflow.
 async fn get_config(State(state): State<AppState>) -> std::result::Result<Response, ApiError> {
-    let vault = Vault::open(&state.root)?;
-    let phases = vault
-        .config
-        .phases
-        .iter()
-        .map(|p| PhaseOut {
-            id: p.id.clone(),
-            name: p.name.clone(),
-            description: p.description.clone(),
-            due: p.due.clone(),
-        })
-        .collect();
-    let workflow = match vault.config.workflow {
-        crate::taskmd::Workflow::Solo => "solo",
-        crate::taskmd::Workflow::PrReview => "pr-review",
-    }
-    .to_string();
-    let today = vault.config.web.today_phases();
-    Ok(Json(ConfigOut {
-        phases,
-        workflow,
-        today,
-        run_enabled: vault.config.run.enabled,
-        run_max_attempts: vault.config.run.max_attempts,
-        run_agents: vault.config.run.agents.keys().cloned().collect(),
-        run_default_agent: vault.config.run.agent.clone(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-    })
-    .into_response())
+    Ok(Json(verbs::config(&state.root)?).into_response())
 }
 
 /// GET /api/next?limit=N — ranked recommendations (subset of the CLI shape).
@@ -1357,15 +1287,6 @@ mod tests {
         assert_eq!(res.headers().get(CACHE_CONTROL).unwrap(), CACHE_NO_STORE);
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("hello spa"));
-    }
-
-    #[test]
-    fn api_error_bad_request_is_400() {
-        // Used by web_terminal (excluded from coverage) for an unknown agent;
-        // exercised here so the constructor stays covered.
-        let e = ApiError::bad_request("nope");
-        assert_eq!(e.status, StatusCode::BAD_REQUEST);
-        assert_eq!(e.message, "nope");
     }
 
     #[test]

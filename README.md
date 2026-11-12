@@ -153,8 +153,11 @@ karamd complete 012                      # solo: completed; pr-review: in-review
 karamd complete 012 --pr https://github.com/o/r/pull/4
 karamd cancel 013
 karamd reopen 013                        # back to pending, timestamps cleared
+karamd postpone 015                      # due -> tomorrow, phase per reschedule rules
 karamd status 014 in-progress            # full enum: pending, in-progress,
                                          # in-review, completed, blocked, cancelled
+karamd config                            # phases, Today grouping, workflow, agents
+karamd terminal-argv 012 --agent claude  # argv for an interactive agent session
 ```
 
 - `create --template` knows taskmd's built-ins (`feature`, `bug`, `chore`,
@@ -171,6 +174,13 @@ karamd status 014 in-progress            # full enum: pending, in-progress,
   entering the status, cleared on leaving, per the taskmd spec).
 - The configured id strategy (`sequential`, `prefixed`, `random`, `ulid`) is
   honored when creating tasks.
+- `postpone` sets `due` to tomorrow and moves the task to the phase the
+  `.taskmd.reschedule.yaml` rules pick for that date.
+- `config` and `terminal-argv` exist for native clients that drive karamd
+  through the CLI instead of the web API. `config --json` is the same shape as
+  `GET /api/config`. `terminal-argv --json` prints `{argv, cwd}`: run `argv` in
+  `cwd` (the vault) to get the session the web terminal would start. Without
+  `--agent` it uses `--run-command` (default `claude`, env `KARAMD_RUN_COMMAND`).
 
 ### Ranked next task
 

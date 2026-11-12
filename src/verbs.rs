@@ -6,6 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
+use serde::Serialize;
 
 use crate::output::TaskView;
 use crate::query::{self, EvalCtx};
@@ -375,6 +376,62 @@ pub fn complete(root: &Path, id: &str, pr: Option<&str>, today: NaiveDate) -> Re
     let scan = vault.scan()?;
     let graph = Graph::build(&scan.tasks);
     Ok(TaskView::build(&task, &graph, false))
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhaseView {
+    pub id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub due: Option<String>,
+}
+
+/// The vault config a client needs to render and drive tasks. Shared by
+/// `karamd config` and `GET /api/config`, so both stay the same shape.
+#[derive(Debug, Serialize)]
+pub struct ConfigView {
+    pub phases: Vec<PhaseView>,
+    pub workflow: String,
+    /// Phase ids the Today view merges, in render order (`web.today`, with its
+    /// default when unset).
+    pub today: Vec<String>,
+    /// `run.enabled` (#043): the `ai-runnable` tag is inert unless true.
+    pub run_enabled: bool,
+    /// `run.max_attempts` (#044).
+    pub run_max_attempts: u32,
+    /// Configured `run.agents` names, sorted (#047).
+    pub run_agents: Vec<String>,
+    /// `run.agent`: the default agent (#047).
+    pub run_default_agent: String,
+    pub version: String,
+}
+
+pub fn config(root: &Path) -> Result<ConfigView> {
+    let vault = Vault::open(root)?;
+    let c = &vault.config;
+    Ok(ConfigView {
+        phases: c
+            .phases
+            .iter()
+            .map(|p| PhaseView {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                description: p.description.clone(),
+                due: p.due.clone(),
+            })
+            .collect(),
+        workflow: match c.workflow {
+            Workflow::Solo => "solo",
+            Workflow::PrReview => "pr-review",
+        }
+        .to_string(),
+        today: c.web.today_phases(),
+        run_enabled: c.run.enabled,
+        run_max_attempts: c.run.max_attempts,
+        run_agents: c.run.agents.keys().cloned().collect(),
+        run_default_agent: c.run.agent.clone(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -1033,5 +1090,23 @@ mod tests {
         }
         let err = create(&root, &spec("X"), day(2026, 7, 2), &mut FixedEntropy).unwrap_err();
         assert!(err.to_string().contains("16 attempts"));
+    }
+
+    #[test]
+    fn config_reports_phases_today_and_agents() {
+        let root = tempdir();
+        fs::write(
+            root.join(".taskmd.yaml"),
+            "workflow: pr-review\nphases:\n  - { id: now, name: Now }\nweb:\n  today: [now]\nrun:\n  agents:\n    claude:\n      command: [claude]\n",
+        )
+        .unwrap();
+        let c = config(&root).unwrap();
+        assert_eq!(c.workflow, "pr-review");
+        assert_eq!(c.phases[0].id.as_deref(), Some("now"));
+        assert_eq!(c.today, vec!["now"]);
+        assert_eq!(c.run_agents, vec!["claude"]);
+        assert_eq!(c.version, env!("CARGO_PKG_VERSION"));
+        fs::write(root.join(".taskmd.yaml"), "phases: []\n").unwrap();
+        assert_eq!(config(&root).unwrap().workflow, "solo");
     }
 }

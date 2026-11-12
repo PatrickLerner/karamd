@@ -13,6 +13,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   set `due` to tomorrow and move the task to the phase the
   `.taskmd.reschedule.yaml` rules pick for that date; with no matching rule or
   no config, only `due` changes.
+- New `karamd config` command: phases, the Today grouping (`web.today`), the
+  workflow and the configured agents, in the same shape as `GET /api/config`.
+- New `karamd terminal-argv <id> [--agent NAME]` command: prints the argv that
+  starts an interactive agent session on a task with the task prompt seeded,
+  the same one the web terminal spawns. `--json` adds the vault as `cwd`.
+  Lets a native client open the session in any terminal.
 
 ## [0.10.0] - 2026-07-16
 
