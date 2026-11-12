@@ -44,6 +44,7 @@ work. One `karamd create` is the whole cost.
 
 - `karamd status <id> <state>` — `pending` `in-progress` `in-review` `completed` `blocked` `cancelled`. Only `pending`/`in-progress` are actionable.
 - `karamd complete <id>` (add `--pr <url>` under the `pr-review` workflow) / `karamd cancel <id>` / `karamd reopen <id>`.
+- `karamd postpone <id>` — push `due` to tomorrow; the phase follows the reschedule rules.
 - `karamd list`, `karamd show <id>`, `karamd next` to inspect.
 
 Go through karamd for all of these — never edit the `.md` frontmatter directly.

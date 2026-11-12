@@ -1,6 +1,6 @@
 ---
 name: karamd-cli
-description: karamd CLI usage and its idempotency contract: the generate command and its flags, the task verbs (create/list/show/complete/cancel/reopen/status/next/validate/web), the query grammar, and machine output. Use when running karamd, scripting it, or explaining what a karamd command does or guarantees.
+description: karamd CLI usage and its idempotency contract: the generate command and its flags, the task verbs (create/list/show/complete/cancel/reopen/postpone/status/next/validate/web), the query grammar, and machine output. Use when running karamd, scripting it, or explaining what a karamd command does or guarantees.
 ---
 
 # karamd CLI
@@ -47,6 +47,7 @@ karamd complete 012                          # solo: completed; pr-review: in-re
 karamd complete 012 --pr https://github.com/o/r/pull/4
 karamd cancel 013
 karamd reopen 013                            # back to pending, timestamps cleared
+karamd postpone 015                          # due -> tomorrow, phase per reschedule rules
 karamd status 014 in-progress                # any of the six statuses
 karamd next
 karamd validate
@@ -60,6 +61,9 @@ karamd web
   `completed`; `pr-review` sets `in-review` and records `--pr`.
 - Status changes auto-maintain `completed_at`/`cancelled_at` (set on entering,
   cleared on leaving), per the taskmd spec.
+- `postpone` sets `due` to tomorrow and moves the task to the phase the
+  `.taskmd.reschedule.yaml` rules pick for that date (`--config` overrides the
+  path). No matching rule or no config: only `due` changes.
 - The full status enum for `status`: `pending`, `in-progress`, `in-review`,
   `completed`, `blocked`, `cancelled`.
 
