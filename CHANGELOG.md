@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-12
+
 ### Added
 
 - New `karamd postpone <id>` command and a **→ tomorrow** button next to the due
