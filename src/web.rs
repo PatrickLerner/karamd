@@ -679,9 +679,7 @@ async fn run_server(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("binding {bind}"))?;
-    let addr = listener
-        .local_addr()
-        .with_context(|| "reading local addr")?;
+    let addr = listener.local_addr().context("reading local addr")?;
     println!("karamd web: serving on http://{addr}");
     // A missing bundle is the common "it loads nothing" surprise: the API is up
     // but `/` 404s. Say so loudly with the fix, rather than leaving a silent 404.

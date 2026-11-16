@@ -1,12 +1,13 @@
 ---
 id: '062'
 title: Move the Rust pin to 1.100.x once coverage line counts are fixed
-status: pending
+status: completed
 created_at: 2026-11-16
 type: chore
 tags:
 - rust
 - ci
+completed_at: 2026-11-16
 ---
 
 ## Description

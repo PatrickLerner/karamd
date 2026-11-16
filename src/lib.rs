@@ -2428,6 +2428,10 @@ mod tests {
         let _ = run_in(&vault, &["stats", "--json"]).unwrap();
         let _ = run_in(&vault, &["stats", "--yaml"]).unwrap();
 
+        // Without broken files search prints no warning.
+        fs::remove_file(vault.join("tasks/003-broken.md")).unwrap();
+        let _ = run_in(&vault, &["search", "login"]).unwrap();
+
         // Vault-open failure propagates through graph/stats too.
         fs::write(vault.join(".taskmd.yaml"), "dir: [unclosed\n").unwrap();
         assert!(run_in(&vault, &["graph"]).is_err());

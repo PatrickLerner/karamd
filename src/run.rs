@@ -61,9 +61,9 @@ pub struct AgentOutcome {
 }
 
 /// Spawns one agent. Behind a trait so the orchestration is tested with a fake
-/// and only the real process glue ([`crate::run_spawn`]) is excluded. When
-/// `log_path` is set the runner tees the agent's stdout/stderr to that file
-/// (#045) in addition to inheriting them to the console.
+/// and only the real process glue ([`crate::run_spawn`]) is excluded. The runner
+/// tees the agent's stdout/stderr to `log_path` (#045) in addition to inheriting
+/// them to the console.
 pub trait AgentRunner {
     fn run(
         &self,
@@ -71,7 +71,7 @@ pub trait AgentRunner {
         prompt: &str,
         working_dir: &Path,
         timeout_secs: u64,
-        log_path: Option<&Path>,
+        log_path: &Path,
     ) -> AgentOutcome;
 }
 
@@ -573,13 +573,7 @@ fn run_one(
     // is a failure that never spawns, with no exit code or output file.
     let (outcome, command) = match resolve_agent(cfg, &staged) {
         Ok(spec) => (
-            runner.run(
-                spec,
-                &prompt,
-                &working_dir,
-                cfg.timeout_secs,
-                Some(&log_path),
-            ),
+            runner.run(spec, &prompt, &working_dir, cfg.timeout_secs, &log_path),
             spec.command.clone(),
         ),
         Err(detail) => (
@@ -798,7 +792,7 @@ mod tests {
         prompt: String,
         working_dir: PathBuf,
         timeout: u64,
-        log_path: Option<PathBuf>,
+        log_path: PathBuf,
     }
 
     struct FakeRunner {
@@ -824,22 +818,20 @@ mod tests {
             prompt: &str,
             working_dir: &Path,
             timeout_secs: u64,
-            log_path: Option<&Path>,
+            log_path: &Path,
         ) -> AgentOutcome {
             self.calls.lock().unwrap().push(Recorded {
                 command: spec.command.clone(),
                 prompt: prompt.to_string(),
                 working_dir: working_dir.to_path_buf(),
                 timeout: timeout_secs,
-                log_path: log_path.map(Path::to_path_buf),
+                log_path: log_path.to_path_buf(),
             });
             // Simulate the tee: drop some captured output at the log path so the
             // orchestration's per-run logging (#045) has a real file to point at.
             // Best-effort, like the real runner: an unwritable path is ignored.
-            if let Some(p) = log_path {
-                let _ = p.parent().map(std::fs::create_dir_all);
-                let _ = fs::write(p, b"fake agent output\n");
-            }
+            let _ = log_path.parent().map(std::fs::create_dir_all);
+            let _ = fs::write(log_path, b"fake agent output\n");
             match &self.mode {
                 Mode::Complete(path) => {
                     let mut t = Task::parse_required(&fs::read_to_string(path).unwrap()).unwrap();
@@ -1267,8 +1259,12 @@ mod tests {
         let path = dir.join("tasks/001-fetch.md");
         let runner = FakeRunner::new(Mode::Complete(path));
         run_all(&vault, &runner, now(), today()).unwrap();
-        // The runner was handed a log path to tee into.
-        assert!(runner.calls.lock().unwrap()[0].log_path.is_some());
+        // The runner was handed a log path inside the run log dir.
+        assert!(
+            runner.calls.lock().unwrap()[0]
+                .log_path
+                .starts_with(dir.join(".karamd/runs"))
+        );
         let log_dir = dir.join(".karamd/runs");
         let recs = read_records(&log_dir);
         assert_eq!(recs.len(), 1);
@@ -1449,7 +1445,7 @@ mod tests {
             _prompt: &str,
             _working_dir: &Path,
             _timeout_secs: u64,
-            _log_path: Option<&Path>,
+            _log_path: &Path,
         ) -> AgentOutcome {
             let mut n = self.calls.lock().unwrap();
             if *n == 0 {
@@ -1492,6 +1488,17 @@ mod tests {
         let runner = FakeRunner::new(Mode::SucceedNoComplete);
         let report = run_all(&vault, &runner, now(), today()).unwrap();
         // The cap stops after one task even though two were runnable.
+        assert_eq!(report.ran.len(), 1);
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn run_all_cap_reached_with_nothing_left_stops_quietly() {
+        let cfg = "run:\n  enabled: true\n  agent: claude\n  max_attempts: 2\n  max_per_invocation: 1\n  agents:\n    claude:\n      command: [claude]\n";
+        let (vault, dir) = build_vault(cfg, &[("001-a.md", &runnable_task("001"))]);
+        let runner = FakeRunner::new(Mode::Complete(dir.join("tasks/001-a.md")));
+        let report = run_all(&vault, &runner, now(), today()).unwrap();
+        // The only task ran and completed, so the cap leaves nothing deferred.
         assert_eq!(report.ran.len(), 1);
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
     }
