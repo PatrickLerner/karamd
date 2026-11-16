@@ -1,11 +1,12 @@
 ---
 id: '060'
 title: 'macos: quick capture should not depend on a private Claude skill'
-status: pending
+status: completed
 created_at: 2026-11-16
 type: improvement
 tags:
 - macos
+completed_at: 2026-11-16
 ---
 
 ## Description

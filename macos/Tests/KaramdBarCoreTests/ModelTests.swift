@@ -140,6 +140,9 @@ struct CaptureRequestTests {
             "buy milk", vault: URL(fileURLWithPath: "/v"), now: day("2026-01-15"), calendar: utc)
         #expect(p.contains("new task in /v. Today is 2026-01-15 (Thursday)."))
         #expect(p.contains("Request: buy milk"))
+        #expect(p.hasPrefix("Use the filing-tasks skill"))
+        let custom = CaptureRequest.prompt("x", vault: URL(fileURLWithPath: "/v"), skill: "file-task")
+        #expect(custom.hasPrefix("Use the file-task skill"))
     }
 
     @Test func filed() {

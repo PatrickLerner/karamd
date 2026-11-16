@@ -2,14 +2,19 @@ import Foundation
 
 /// Quick capture hands free text to a headless `claude -p`, which files the task through karamd.
 public enum CaptureRequest {
-    public static func prompt(_ text: String, vault: URL, now: Date = .now, calendar: Calendar = .current) -> String {
+    /// Ships with karamd (`skills/filing-tasks`).
+    public static let defaultSkill = "filing-tasks"
+
+    public static func prompt(
+        _ text: String, vault: URL, skill: String = defaultSkill, now: Date = .now, calendar: Calendar = .current
+    ) -> String {
         let f = DateFormatter()
         f.calendar = calendar
         f.timeZone = calendar.timeZone
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd (EEEE)"
         return """
-            Use the file-task skill to file this as one new task in \(vault.path). Today is \(f.string(from: now)).
+            Use the \(skill) skill to file this as one new task in \(vault.path). Today is \(f.string(from: now)).
             Decide title, priority, tags, due and body yourself. Do not ask questions.
             Keep names exactly as written.
 

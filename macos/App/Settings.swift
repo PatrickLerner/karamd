@@ -1,7 +1,7 @@
 import AppKit
 import KaramdBarCore
 
-/// Paths, overridable with `defaults write dev.karamd.bar <key> <path>`.
+/// Settings, overridable with `defaults write dev.karamd.bar <key> <value>`.
 enum Karamd {
     static var binary: String {
         UserDefaults.standard.string(forKey: "karamdPath") ?? "/run/current-system/sw/bin/karamd"
@@ -10,6 +10,11 @@ enum Karamd {
     static var vault: URL {
         UserDefaults.standard.string(forKey: "vaultPath").map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Notes")
+    }
+
+    /// Skill quick capture tells claude to use.
+    static var captureSkill: String {
+        UserDefaults.standard.string(forKey: "captureSkill") ?? CaptureRequest.defaultSkill
     }
 
     static var terminal: String {
