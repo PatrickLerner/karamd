@@ -351,9 +351,11 @@ and writes go through the `karamd` binary, so the app needs it installed. It
 adds itself to Login Items once, on its first launch from an Applications
 folder; if you remove it there, it stays off.
 
-Paths are set with `defaults write dev.karamd.bar <key> <path>`: `karamdPath`
+Paths are set with `defaults write dev.karamd.bar <key> <value>`: `karamdPath`
 (default `/run/current-system/sw/bin/karamd`), `vaultPath` (default `~/Notes`)
-and `terminalPath` (default `~/.nix-profile/bin/alacritty`). The terminal must
+`terminalPath` (default `~/.nix-profile/bin/alacritty`) and `captureSkill`, the
+skill quick capture tells Claude to use (default `filing-tasks`, shipped in
+`skills/`). The terminal must
 accept Alacritty's `--working-directory <dir>` and `-e <command>` flags.
 
 ```

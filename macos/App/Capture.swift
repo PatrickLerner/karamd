@@ -4,7 +4,7 @@ import KaramdBarCore
 import UserNotifications
 
 /// Quick capture: ⌥⌘T or the + button opens a one-line field; headless Claude files the task
-/// with the file-task skill and a notification reports the result.
+/// with the configured skill and a notification reports the result.
 @MainActor
 final class Capture: NSObject, UNUserNotificationCenterDelegate, NSTextFieldDelegate {
     static let shared = Capture()
@@ -165,7 +165,7 @@ final class Capture: NSObject, UNUserNotificationCenterDelegate, NSTextFieldDele
     nonisolated private static func runClaude(_ text: String) async -> CaptureRequest.Outcome {
         let vault = Karamd.vault
         var env = Karamd.cleanEnv
-        env["KARAMD_PROMPT"] = CaptureRequest.prompt(text, vault: vault)
+        env["KARAMD_PROMPT"] = CaptureRequest.prompt(text, vault: vault, skill: Karamd.captureSkill)
         let started = Date()
         let r: ProcessResult
         do {
