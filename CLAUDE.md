@@ -114,6 +114,18 @@ Split into a library crate (all logic, unit-testable) plus a thin binary:
   `RESERVED_FRONTMATTER_KEYS` rejected by `validate`). This is how a rule emits
   an `ai-runnable` task, closing the generate→run loop.
 - `recurring.example.yml` — rule format reference.
+- macOS app: `macos/` holds KaramdBar, a SwiftUI menu bar app that drives the CLI
+  (`list`/`show`/`config`/`terminal-argv`/`create` with `--json`, plus the
+  write verbs). `macos/Sources/KaramdBarCore` is a SwiftPM library with all
+  UI-free logic (models, Board building, dates, the CLI client, edit plans,
+  capture prompt/parsing) and **100% line coverage**; `macos/App` is the
+  SwiftUI/AppKit layer, excluded like `web_terminal.rs`. Built with xcodegen
+  (`macos/project.yml`) + `macos/build.sh`; version comes from `Cargo.toml`.
+- CLI ↔ app contract: `tests/macos_contract.rs` compares the CLI's JSON on the
+  fixture vault with golden files in
+  `macos/Tests/KaramdBarCoreTests/Fixtures/cli/`, which the Swift tests decode.
+  Changing that output means `KARAMD_BLESS=1 cargo test --test macos_contract`
+  and then fixing the app until `macos/scripts/check.sh` passes.
 
 Core logic keeps I/O thin and functions pure so the suite hits **100% line
 coverage**
@@ -193,6 +205,9 @@ dropped ("prüfen" → "pr-fen"). Covered by a unit test — keep it green.
   --all-targets --all-features` (clippy `all = deny`, `unsafe_code = forbid`),
   `cargo test`, and the 100%-line coverage check. All run in GitHub Actions
   (`.github/workflows/ci.yml`).
+- Swift (macOS app): Swift 6 language mode, warnings are errors, `swift-format
+  lint --strict` with `macos/.swift-format`, Swift Testing. Gate:
+  `KARAMD_BIN=$PWD/target/debug/karamd macos/scripts/check.sh`.
 - No em-dashes in prose/commit messages. No "Co-Authored-By" / AI mentions in
   commits. Do not commit unless asked.
 - Intended to run unattended on a schedule (e.g. cron) against the synced vault.

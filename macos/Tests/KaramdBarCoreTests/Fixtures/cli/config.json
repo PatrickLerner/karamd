@@ -1,0 +1,38 @@
+{
+  "phases": [
+    {
+      "description": null,
+      "due": null,
+      "id": "ongoing",
+      "name": "Ongoing"
+    },
+    {
+      "description": null,
+      "due": null,
+      "id": "now",
+      "name": "Now"
+    },
+    {
+      "description": null,
+      "due": null,
+      "id": "next",
+      "name": "Next"
+    },
+    {
+      "description": null,
+      "due": null,
+      "id": "later",
+      "name": "Later"
+    }
+  ],
+  "run_agents": [],
+  "run_default_agent": "claude",
+  "run_enabled": false,
+  "run_max_attempts": 3,
+  "today": [
+    "ongoing",
+    "now"
+  ],
+  "version": "<version>",
+  "workflow": "solo"
+}

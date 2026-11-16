@@ -65,3 +65,29 @@ jobs:
       - name: Build SPA bundle
         run: bun run build
         working-directory: web
+
+  macos:
+    name: macOS app (swift-format + test + coverage + build)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build karamd for the real-binary test
+        run: cargo build
+
+      - name: Lint, test, coverage (100% lines on KaramdBarCore)
+        run: macos/scripts/check.sh
+        env:
+          KARAMD_BIN: ${{ github.workspace }}/target/debug/karamd
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Build app
+        run: macos/build.sh

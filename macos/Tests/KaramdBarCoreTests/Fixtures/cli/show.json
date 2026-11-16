@@ -1,0 +1,18 @@
+{
+  "blockers": [],
+  "body": "# Pay rent\n\nTransfer before the 10th.",
+  "created_at": "2025-11-01",
+  "dependencies": [],
+  "due": "2026-01-10",
+  "file": "001-pay-rent.md",
+  "id": "001",
+  "phase": "now",
+  "priority": "high",
+  "ready": true,
+  "status": "pending",
+  "tags": [
+    "home",
+    "money"
+  ],
+  "title": "Pay [[rent]]"
+}

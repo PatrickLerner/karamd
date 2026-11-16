@@ -1,0 +1,41 @@
+name: KaramdBar
+options:
+  bundleIdPrefix: dev.karamd
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  KaramdBarCore:
+    path: .
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    # build.sh passes the karamd version from Cargo.toml.
+    MARKETING_VERSION: "0.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+targets:
+  KaramdBar:
+    type: application
+    platform: macOS
+    sources: [App, Resources]
+    dependencies:
+      - package: KaramdBarCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.karamd.bar
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: karamd Bar
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSUIElement: true
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.karamd.bar
+            CFBundleURLSchemes: [karamdbar]

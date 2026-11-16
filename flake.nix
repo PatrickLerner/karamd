@@ -110,6 +110,34 @@
               tar -xzf $src -C $out
             '';
 
+        # The macOS menu bar app (macos/), built and zipped by the release
+        # workflow; Nix cannot run xcodebuild in its sandbox. Fill the hash after
+        # a release, like the others. The app calls `karamd`, so install both.
+        karamd-bar = final.stdenvNoCC.mkDerivation {
+          pname = "karamd-bar";
+          inherit version;
+          src = final.fetchurl {
+            url = "https://github.com/PatrickLerner/karamd/releases/download/v${version}/karamd-bar-macos.zip";
+            hash = final.lib.fakeHash;
+          };
+          nativeBuildInputs = [ final.unzip ];
+          sourceRoot = ".";
+          dontConfigure = true;
+          dontBuild = true;
+          dontFixup = true;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/Applications
+            cp -R KaramdBar.app $out/Applications/
+            runHook postInstall
+          '';
+          meta = {
+            description = "karamd menu bar app for macOS";
+            license = final.lib.licenses.mit;
+            platforms = final.lib.platforms.darwin;
+          };
+        };
+
         # karamd + the pinned bundle in one closure: the wrapper defaults
         # KARAMD_WEB_DIR to the store path, so `karamd web` needs no --web-dir.
         karamd-web = final.runCommand "karamd-web-${version}" {
@@ -139,6 +167,9 @@
           karamd-bin = mkBin system;
           # karamd bundled with the web UI (frontend + binary in one closure).
           inherit (pkgs) karamd-web;
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+          inherit (pkgs) karamd-bar;
         }
       );
 

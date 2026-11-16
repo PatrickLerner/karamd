@@ -341,6 +341,28 @@ network or CDN dependency. The API: `GET /api/tasks`, `GET /api/tasks/{id}`,
 `POST /api/rules/preview`, and the `GET /api/tasks/{id}/run` WebSocket; failures
 return a non-2xx `{ "error": ... }`.
 
+## macOS menu bar app
+
+`macos/` holds KaramdBar, a menu bar and desktop app over the same vault: open
+tasks in the menu bar and on the desktop, a full overview window with an
+editor (⌥⌘O), quick capture through a headless `claude -p` (⌥⌘T), and "Open in
+Claude", which starts the `terminal-argv` session in your terminal. All reads
+and writes go through the `karamd` binary, so the app needs it installed. It
+adds itself to Login Items on first launch.
+
+Paths are set with `defaults write dev.karamd.bar <key> <path>`: `karamdPath`
+(default `/run/current-system/sw/bin/karamd`), `vaultPath` (default `~/Notes`)
+and `terminalPath` (default `~/.nix-profile/bin/alacritty`).
+
+```
+macos/build.sh             # build into macos/build (needs Xcode + xcodegen)
+macos/build.sh --install   # copy to ~/Applications and relaunch
+```
+
+Each release attaches a universal `karamd-bar-macos.zip`; on macOS the flake
+exposes it as `packages.karamd-bar`. The app takes its version from
+`Cargo.toml`, so the CLI and the app always ship together.
+
 ## Design
 
 - The recurring *generator* only ever **adds** task files and **reads**
@@ -406,3 +428,19 @@ cargo llvm-cov --ignore-filename-regex 'src/main.rs' --fail-under-lines 100
 
 The suite holds 100% line coverage (the binary shim aside). CI runs all of the
 above on every push and PR (`.github/workflows/ci.yml`).
+
+The macOS app has its own gate, also in CI:
+
+```
+KARAMD_BIN=$PWD/target/debug/karamd macos/scripts/check.sh
+```
+
+It runs `swift-format lint --strict`, the Swift tests with warnings as errors,
+and requires 100% line coverage on `KaramdBarCore` (the UI-free logic). The
+SwiftUI/AppKit files in `macos/App` are not measured.
+
+`tests/macos_contract.rs` runs the CLI on the fixture vault in
+`macos/Tests/KaramdBarCoreTests/Fixtures/vault` and compares the JSON with the
+golden files next to it, which the Swift tests decode. If you change that
+output, bless the new files with `KARAMD_BLESS=1 cargo test --test
+macos_contract` and update the app until `check.sh` passes.

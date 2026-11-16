@@ -1,0 +1,10 @@
+dir: tasks
+phases:
+  - id: ongoing
+    name: Ongoing
+  - id: now
+    name: Now
+  - id: next
+    name: Next
+  - id: later
+    name: Later
