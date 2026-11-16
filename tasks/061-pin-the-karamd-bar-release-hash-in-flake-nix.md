@@ -1,12 +1,13 @@
 ---
 id: '061'
 title: Pin the karamd-bar release hash in flake.nix
-status: pending
+status: completed
 created_at: 2026-11-16
 type: chore
 tags:
 - macos
 - nix
+completed_at: 2026-11-16
 ---
 
 ## Description
