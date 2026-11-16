@@ -62,7 +62,7 @@ impl AgentRunner for ProcessRunner {
         prompt: &str,
         working_dir: &Path,
         timeout_secs: u64,
-        log_path: Option<&Path>,
+        log_path: &Path,
     ) -> AgentOutcome {
         if spec.command.is_empty() {
             return fail("agent command is empty");
@@ -71,18 +71,15 @@ impl AgentRunner for ProcessRunner {
         // Open the per-run log for the tee. Logging is best-effort: if the file
         // can't be created, warn and fall back to inherited output rather than
         // failing the agent (which would burn an attempt for a logging problem).
-        let log_file = match log_path {
-            Some(p) => match File::create(p) {
-                Ok(f) => Some(Arc::new(Mutex::new(f))),
-                Err(e) => {
-                    eprintln!(
-                        "karamd: warning: could not open run log {}: {e}; continuing without capture",
-                        p.display()
-                    );
-                    None
-                }
-            },
-            None => None,
+        let log_file = match File::create(log_path) {
+            Ok(f) => Some(Arc::new(Mutex::new(f))),
+            Err(e) => {
+                eprintln!(
+                    "karamd: warning: could not open run log {}: {e}; continuing without capture",
+                    log_path.display()
+                );
+                None
+            }
         };
 
         // Build argv + optional stdin per the agent's prompt-delivery mode.
