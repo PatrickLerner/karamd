@@ -1424,7 +1424,7 @@ mod tests {
         // An immediate shutdown makes the server stop before any connection.
         let root = tempdir();
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        run_blocking(
+        let _ = run_blocking(
             addr,
             root.clone(),
             root.join("web-dist"),

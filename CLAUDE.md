@@ -200,7 +200,9 @@ dropped ("prüfen" → "pr-fen"). Covered by a unit test — keep it green.
 
 ## Conventions
 
-- Rust, edition 2024. Prefer std; keep the dependency set small.
+- Rust, edition 2024, toolchain pinned in `rust-toolchain.toml` (CI and release
+  workflows pin the same version; bump all three together). Prefer std; keep the
+  dependency set small.
 - Linters gate everything: `cargo fmt --all -- --check`, `cargo clippy
   --all-targets --all-features` (clippy `all = deny`, `unsafe_code = forbid`),
   `cargo test`, and the 100%-line coverage check. All run in GitHub Actions

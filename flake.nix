@@ -187,11 +187,9 @@
         in
         {
           default = pkgs.mkShell {
+            # rustup installs the toolchain pinned in rust-toolchain.toml.
             packages = [
-              pkgs.cargo
-              pkgs.rustc
-              pkgs.clippy
-              pkgs.rustfmt
+              pkgs.rustup
               pkgs.bun
             ];
           };

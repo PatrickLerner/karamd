@@ -1611,7 +1611,7 @@ mod tests {
     #[test]
     fn run_end_to_end() {
         let (vault, config) = vault_with_rules(AFTER);
-        run([
+        let _ = run([
             "karamd".into(),
             "generate".into(),
             "--vault".into(),
@@ -1653,7 +1653,7 @@ mod tests {
         let vault = tempdir();
         fs::create_dir_all(vault.join("tasks")).unwrap();
         fs::write(vault.join(DEFAULT_CONFIG), AFTER).unwrap();
-        run([
+        let _ = run([
             "karamd".into(),
             "generate".into(),
             "--vault".into(),
@@ -1668,7 +1668,7 @@ mod tests {
         // A far-future --today the real clock can never match: the calendar rule
         // fires only because the override put us inside its 2099 window.
         let (vault, config) = vault_with_rules(CAL);
-        run([
+        let _ = run([
             "karamd".into(),
             "generate".into(),
             "--vault".into(),
@@ -1721,11 +1721,11 @@ mod tests {
                 vault.clone().into_os_string(),
             ];
             args.extend(fmt.map(Into::into));
-            run(args).unwrap();
+            let _ = run(args).unwrap();
         }
         // A phase without an id is keyed by its name.
         fs::write(vault.join(".taskmd.yaml"), "phases:\n  - name: Plain\n").unwrap();
-        run(["karamd", "config", "--vault", vault.to_str().unwrap()]).unwrap();
+        let _ = run(["karamd", "config", "--vault", vault.to_str().unwrap()]).unwrap();
     }
 
     #[test]
@@ -1749,7 +1749,7 @@ mod tests {
                 vault.to_str().unwrap(),
             ];
             args.extend(extra);
-            run(args).unwrap();
+            let _ = run(args).unwrap();
         }
         assert!(
             run([
@@ -1781,7 +1781,7 @@ mod tests {
                 "2026-07-15".into(),
             ];
             args.extend(fmt.map(Into::into));
-            run(args).unwrap();
+            let _ = run(args).unwrap();
         }
         let body = fs::read_to_string(vault.join("tasks/001-a.md")).unwrap();
         assert!(body.contains("due: 2026-07-16"), "{body}");
@@ -1795,7 +1795,7 @@ mod tests {
             "id: \"001\"\ntitle: a\nstatus: pending\nphase: later\ndue: 2026-07-15\n",
         );
         fs::write(vault.join(DEFAULT_RESCHEDULE_CONFIG), RESCHED_RULES).unwrap();
-        run([
+        let _ = run([
             "karamd".into(),
             "reschedule".into(),
             "--vault".into(),
@@ -1837,7 +1837,7 @@ mod tests {
                 "2026-07-15".to_string(),
             ];
             args.extend(extra.into_iter().map(String::from));
-            run(args.into_iter().map(OsString::from)).unwrap();
+            let _ = run(args.into_iter().map(OsString::from)).unwrap();
         }
         // --dry-run ran first and must not have written.
         assert!(
@@ -1855,7 +1855,7 @@ mod tests {
             "id: \"001\"\ntitle: a\nstatus: pending\nphase: now\ndue: 2026-07-15\n",
         );
         fs::write(vault.join(DEFAULT_RESCHEDULE_CONFIG), RESCHED_RULES).unwrap();
-        run([
+        let _ = run([
             "karamd".into(),
             "reschedule".into(),
             "--vault".into(),
@@ -1873,7 +1873,7 @@ mod tests {
             "id: \"001\"\ntitle: a\nstatus: pending\ndue: 2026-07-15\n",
         );
         // No .taskmd.reschedule.yaml written: NoConfig branch.
-        run([
+        let _ = run([
             "karamd".into(),
             "reschedule".into(),
             "--vault".into(),
@@ -1893,7 +1893,7 @@ mod tests {
             format!("enabled: false\n{RESCHED_RULES}"),
         )
         .unwrap();
-        run([
+        let _ = run([
             "karamd".into(),
             "reschedule".into(),
             "--vault".into(),
@@ -2053,7 +2053,7 @@ mod tests {
     fn run_dry_run_reports_would_create() {
         // dry-run that IS due -> exercises the "would create" log branch.
         let (vault, config) = vault_with_rules(AFTER);
-        run([
+        let _ = run([
             "karamd".into(),
             "generate".into(),
             "--vault".into(),
@@ -2073,7 +2073,7 @@ mod tests {
         // so the branch is exercised regardless of the real date: CAL is
         // annual 07-20 with a 10-day lead, so a run inside that window (e.g.
         // early July) would otherwise be due and skip this branch.
-        run([
+        let _ = run([
             "karamd".into(),
             "generate".into(),
             "--vault".into(),
@@ -2104,7 +2104,7 @@ mod tests {
     fn run_create_and_show_and_list() {
         let vault = tempdir();
         fs::create_dir_all(vault.join("tasks")).unwrap();
-        run_in(
+        let _ = run_in(
             &vault,
             &[
                 "create",
@@ -2120,18 +2120,18 @@ mod tests {
         .unwrap();
         assert!(vault.join("tasks/001-my-first-task.md").exists());
         // Machine formats and the human table all render.
-        run_in(&vault, &["list"]).unwrap();
-        run_in(&vault, &["list", "status:pending", "--json"]).unwrap();
-        run_in(&vault, &["list", "priority>=high", "--yaml"]).unwrap();
-        run_in(&vault, &["show", "001"]).unwrap();
-        run_in(&vault, &["show", "001", "--json"]).unwrap();
+        let _ = run_in(&vault, &["list"]).unwrap();
+        let _ = run_in(&vault, &["list", "status:pending", "--json"]).unwrap();
+        let _ = run_in(&vault, &["list", "priority>=high", "--yaml"]).unwrap();
+        let _ = run_in(&vault, &["show", "001"]).unwrap();
+        let _ = run_in(&vault, &["show", "001", "--json"]).unwrap();
     }
 
     #[test]
     fn run_create_rejects_duplicate_open_title() {
         let vault = tempdir();
         fs::create_dir_all(vault.join("tasks")).unwrap();
-        run_in(&vault, &["create", "Same title"]).unwrap();
+        let _ = run_in(&vault, &["create", "Same title"]).unwrap();
         // Plain (human) duplicate bubbles up as an error, writes nothing more.
         let err = run_in(&vault, &["create", "Same title"]);
         assert!(err.is_err());
@@ -2160,7 +2160,7 @@ mod tests {
     #[test]
     fn run_create_with_template_and_machine_output() {
         let vault = tempdir();
-        run_in(
+        let _ = run_in(
             &vault,
             &["create", "Bug hunt", "--template", "bug", "--json"],
         )
@@ -2192,7 +2192,7 @@ mod tests {
         assert!(err.to_string().contains("nothing to change"));
 
         // Set fields; --phase "" clears; --tag replaces; --due sets.
-        run_in(
+        let _ = run_in(
             &vault,
             &[
                 "edit",
@@ -2223,9 +2223,9 @@ mod tests {
         assert!(raw.contains("dependencies:"));
 
         // Clear due and owner with empty strings; machine formats render.
-        run_in(&vault, &["edit", "002", "--due", "", "--json"]).unwrap();
+        let _ = run_in(&vault, &["edit", "002", "--due", "", "--json"]).unwrap();
         assert!(!read().contains("due:"));
-        run_in(&vault, &["edit", "002", "--owner", "", "--yaml"]).unwrap();
+        let _ = run_in(&vault, &["edit", "002", "--owner", "", "--yaml"]).unwrap();
         assert!(!read().contains("owner:"));
 
         // A bad enum / bad due propagate as errors.
@@ -2236,7 +2236,7 @@ mod tests {
     #[test]
     fn run_create_with_due() {
         let vault = tempdir();
-        run_in(&vault, &["create", "Scheduled", "--due", "2026-09-01"]).unwrap();
+        let _ = run_in(&vault, &["create", "Scheduled", "--due", "2026-09-01"]).unwrap();
         let raw = fs::read_to_string(vault.join("tasks/001-scheduled.md")).unwrap();
         assert!(raw.contains("due: 2026-09-01"));
     }
@@ -2252,18 +2252,18 @@ mod tests {
         .unwrap();
         let read = || fs::read_to_string(vault.join("tasks/001-a.md")).unwrap();
 
-        run_in(&vault, &["status", "001", "in-progress"]).unwrap();
+        let _ = run_in(&vault, &["status", "001", "in-progress"]).unwrap();
         assert!(read().contains("status: in-progress"));
 
-        run_in(&vault, &["complete", "001", "--today", "2026-07-02"]).unwrap();
+        let _ = run_in(&vault, &["complete", "001", "--today", "2026-07-02"]).unwrap();
         assert!(read().contains("status: completed"));
         assert!(read().contains("completed_at: 2026-07-02"));
 
-        run_in(&vault, &["reopen", "001", "--yaml"]).unwrap();
+        let _ = run_in(&vault, &["reopen", "001", "--yaml"]).unwrap();
         assert!(read().contains("status: pending"));
         assert!(!read().contains("completed_at"));
 
-        run_in(
+        let _ = run_in(
             &vault,
             &["cancel", "001", "--today", "2026-07-03", "--json"],
         )
@@ -2282,7 +2282,7 @@ mod tests {
             "---\nid: \"001\"\ntitle: A\nstatus: in-progress\n---\n",
         )
         .unwrap();
-        run_in(&vault, &["complete", "001", "--pr", "https://x/pull/9"]).unwrap();
+        let _ = run_in(&vault, &["complete", "001", "--pr", "https://x/pull/9"]).unwrap();
         let raw = fs::read_to_string(vault.join("tasks/001-a.md")).unwrap();
         assert!(raw.contains("status: in-review"));
         assert!(raw.contains("https://x/pull/9"));
@@ -2315,8 +2315,8 @@ mod tests {
             "---\nid: \"001\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\n---\n",
         )
         .unwrap();
-        run_in(&vault, &["run"]).unwrap();
-        run_in(&vault, &["run", "--dry-run"]).unwrap();
+        let _ = run_in(&vault, &["run"]).unwrap();
+        let _ = run_in(&vault, &["run", "--dry-run"]).unwrap();
 
         // Enabled + a runnable task: --dry-run lists it, spawning nothing.
         fs::write(
@@ -2324,7 +2324,7 @@ mod tests {
             "run:\n  enabled: true\n  agent: claude\n  agents:\n    claude:\n      command: [claude]\n",
         )
         .unwrap();
-        run_in(&vault, &["run", "--dry-run"]).unwrap();
+        let _ = run_in(&vault, &["run", "--dry-run"]).unwrap();
         // A malformed config propagates as an error through the arm.
         fs::write(vault.join(".taskmd.yaml"), "run: [unclosed\n").unwrap();
         assert!(run_in(&vault, &["run"]).is_err());
@@ -2348,7 +2348,7 @@ mod tests {
             "---\nid: \"001\"\ntitle: t\nstatus: pending\ntags: [ai-runnable]\n---\n",
         )
         .unwrap();
-        run_in(&vault, &["run"]).unwrap();
+        let _ = run_in(&vault, &["run"]).unwrap();
         // The failed attempt was recorded.
         let body = fs::read_to_string(vault.join("tasks/001-a.md")).unwrap();
         assert!(body.contains("ai_status: failed"));
@@ -2375,11 +2375,11 @@ mod tests {
             "---\nid: \"002\"\ntitle: B\nstatus: pending\npriority: critical\n---\n",
         )
         .unwrap();
-        run_in(&vault, &["next", "--runnable"]).unwrap();
-        run_in(&vault, &["next", "--runnable", "--json"]).unwrap();
+        let _ = run_in(&vault, &["next", "--runnable"]).unwrap();
+        let _ = run_in(&vault, &["next", "--runnable", "--json"]).unwrap();
         // With the feature off, --runnable ranks nothing.
         fs::write(vault.join(".taskmd.yaml"), "phases: []\n").unwrap();
-        run_in(&vault, &["next", "--runnable"]).unwrap();
+        let _ = run_in(&vault, &["next", "--runnable"]).unwrap();
     }
 
     #[test]
@@ -2418,15 +2418,15 @@ mod tests {
         )
         .unwrap();
 
-        run_in(&vault, &["search", "login"]).unwrap();
-        run_in(&vault, &["search", "login", "--json"]).unwrap();
-        run_in(&vault, &["search", "login", "--yaml"]).unwrap();
-        run_in(&vault, &["graph"]).unwrap();
-        run_in(&vault, &["graph", "--json"]).unwrap();
-        run_in(&vault, &["graph", "--yaml"]).unwrap();
-        run_in(&vault, &["stats"]).unwrap();
-        run_in(&vault, &["stats", "--json"]).unwrap();
-        run_in(&vault, &["stats", "--yaml"]).unwrap();
+        let _ = run_in(&vault, &["search", "login"]).unwrap();
+        let _ = run_in(&vault, &["search", "login", "--json"]).unwrap();
+        let _ = run_in(&vault, &["search", "login", "--yaml"]).unwrap();
+        let _ = run_in(&vault, &["graph"]).unwrap();
+        let _ = run_in(&vault, &["graph", "--json"]).unwrap();
+        let _ = run_in(&vault, &["graph", "--yaml"]).unwrap();
+        let _ = run_in(&vault, &["stats"]).unwrap();
+        let _ = run_in(&vault, &["stats", "--json"]).unwrap();
+        let _ = run_in(&vault, &["stats", "--yaml"]).unwrap();
 
         // Vault-open failure propagates through graph/stats too.
         fs::write(vault.join(".taskmd.yaml"), "dir: [unclosed\n").unwrap();
@@ -2454,11 +2454,11 @@ mod tests {
             "---\nid: \"002\"\ntitle: B\nstatus: pending\npriority: critical\ndependencies: [\"001\"]\n---\n",
         )
         .unwrap();
-        run_in(&vault, &["next"]).unwrap();
-        run_in(&vault, &["next", "--json", "--limit", "1"]).unwrap();
-        run_in(&vault, &["next", "--yaml"]).unwrap();
-        run_in(&vault, &["next", "--quick-wins", "--critical"]).unwrap();
-        run_in(&vault, &["next", "--phase", "v1", "--strict-phases"]).unwrap();
+        let _ = run_in(&vault, &["next"]).unwrap();
+        let _ = run_in(&vault, &["next", "--json", "--limit", "1"]).unwrap();
+        let _ = run_in(&vault, &["next", "--yaml"]).unwrap();
+        let _ = run_in(&vault, &["next", "--quick-wins", "--critical"]).unwrap();
+        let _ = run_in(&vault, &["next", "--phase", "v1", "--strict-phases"]).unwrap();
         // Vault open failure propagates.
         fs::write(vault.join(".taskmd.yaml"), "dir: [broken\n").unwrap();
         assert!(run_in(&vault, &["next"]).is_err());
@@ -2474,7 +2474,7 @@ mod tests {
         )
         .unwrap();
         // Exercises the warning branch (output goes to stderr).
-        run_in(&vault, &["list"]).unwrap();
+        let _ = run_in(&vault, &["list"]).unwrap();
     }
 
     #[test]
