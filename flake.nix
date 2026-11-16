@@ -30,19 +30,19 @@
       prebuilt = {
         "x86_64-linux" = {
           target = "x86_64-unknown-linux-musl";
-          hash = "sha256-wEF7ivuphbXSTEWiXU7anqv3w1c6k7FpXwgZHdPNT/c=";
+          hash = "sha256-2fkJKSj8UPggRsRyzOiUDFjuOEAYrBdShJw4USfPohc=";
         };
         "aarch64-linux" = {
           target = "aarch64-unknown-linux-musl";
-          hash = "sha256-e0BYoW+BZanH9AjGsgH8ThW5GpA1Mt0F7SXEUVCk3fk=";
+          hash = "sha256-+nYqdfO8zEZ5FqLrB6vc54Wq3huQ3VNywkZH0aAJa/o=";
         };
         "x86_64-darwin" = {
           target = "x86_64-apple-darwin";
-          hash = "sha256-hXVGn5kWxemIule4aTDeQmAbSU+Lc3ub+WtMU/fWIak=";
+          hash = "sha256-8tUQDBjz9zu5zcJHglAgrObcz9s10UjOT2C/4Z0uyIE=";
         };
         "aarch64-darwin" = {
           target = "aarch64-apple-darwin";
-          hash = "sha256-usCpzpzf0KtU1IWgwqXyP5tA6COBs8/oi7UcOkVC4rE=";
+          hash = "sha256-kwGpI5ZzYwzD3lbaEPfpCqbudDrMdWayrT0bTuDWOQU=";
         };
       };
 
@@ -101,7 +101,7 @@
             {
               src = final.fetchurl {
                 url = "https://github.com/PatrickLerner/karamd/releases/download/v${version}/karamd-web-dist.tar.gz";
-                hash = "sha256-rIKsIrjgqdvutgyc0pZdATwUNZlQnhpJq6ECfJ34wa8=";
+                hash = "sha256-Y6c33NnFzoaklASYR/whSVfrnKOaTfVDCmeRCqwFRxU=";
               };
               nativeBuildInputs = [ final.gnutar final.gzip ];
             }
@@ -111,14 +111,14 @@
             '';
 
         # The macOS menu bar app (macos/), built and zipped by the release
-        # workflow; Nix cannot run xcodebuild in its sandbox. Fill the hash after
-        # a release, like the others. The app calls `karamd`, so install both.
+        # workflow; Nix cannot run xcodebuild in its sandbox. Pin the hash after
+        # each release, like the others. The app calls `karamd`, so install both.
         karamd-bar = final.stdenvNoCC.mkDerivation {
           pname = "karamd-bar";
           inherit version;
           src = final.fetchurl {
             url = "https://github.com/PatrickLerner/karamd/releases/download/v${version}/karamd-bar-macos.zip";
-            hash = final.lib.fakeHash;
+            hash = "sha256-hBWvHETcY6JxZW6CKLJkEyHtvwwaD23qTOZxC29Y+RA=";
           };
           nativeBuildInputs = [ final.unzip ];
           sourceRoot = ".";
