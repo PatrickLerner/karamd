@@ -20,7 +20,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           # Same as rust-toolchain.toml.
-          toolchain: 1.99.1
+          toolchain: 1.100.0
           components: rustfmt, clippy, llvm-tools-preview
 
       - name: Cache cargo
@@ -86,7 +86,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           # Same as rust-toolchain.toml.
-          toolchain: 1.99.1
+          toolchain: 1.100.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
