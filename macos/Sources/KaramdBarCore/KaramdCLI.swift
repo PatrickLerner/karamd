@@ -4,51 +4,49 @@ import Foundation
 public struct KaramdCLI: Sendable {
     public let binary: String
     public let vault: URL
+    public let timeout: TimeInterval
 
-    public init(binary: String, vault: URL) {
+    public init(binary: String, vault: URL, timeout: TimeInterval = 60) {
         self.binary = binary
         self.vault = vault
+        self.timeout = timeout
+    }
+
+    /// Options go in `--flag=value` form and positionals after `--`, so a value starting with `-` stays a value.
+    public static func argv(_ command: String, vault: URL, options: [String], positional: [String]) -> [String] {
+        [command, "--vault=\(vault.path)"] + options + ["--"] + positional
     }
 
     @discardableResult
-    public func run(_ args: [String]) async throws -> Data {
-        let binary = binary
-        let args = args + ["--vault", vault.path]
-        return try await Task.detached {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: binary)
-            p.arguments = args
-            let out = Pipe()
-            let err = Pipe()
-            p.standardOutput = out
-            p.standardError = err
-            do { try p.run() } catch {
-                throw CLIError("cannot run \(binary): \(error.localizedDescription)")
-            }
-            let data = out.fileHandleForReading.readDataToEndOfFile()
-            let errData = err.fileHandleForReading.readDataToEndOfFile()
-            p.waitUntilExit()
-            guard p.terminationStatus == 0 else {
-                let msg = String(decoding: errData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                throw CLIError(msg.isEmpty ? "karamd exited \(p.terminationStatus)" : msg)
-            }
-            return data
-        }.value
+    public func run(_ command: String, _ options: [String] = [], _ positional: [String] = []) async throws -> Data {
+        let args = Self.argv(command, vault: vault, options: options, positional: positional)
+        let r: ProcessResult
+        do { r = try await Subprocess.run(binary, args, timeout: timeout) } catch {
+            throw CLIError("cannot run \(binary): \(error.localizedDescription)")
+        }
+        if r.timedOut { throw CLIError("karamd \(command) timed out after \(Int(timeout)) s") }
+        guard r.status == 0 else {
+            let msg = String(decoding: r.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw CLIError(msg.isEmpty ? "karamd exited \(r.status)" : msg)
+        }
+        return r.stdout
     }
 
-    public func decode<T: Decodable>(_ args: [String]) async throws -> T {
-        try JSONDecoder().decode(T.self, from: try await run(args + ["--json"]))
+    public func decode<T: Decodable>(_ command: String, _ options: [String] = [], _ positional: [String] = [])
+        async throws -> T
+    {
+        try JSONDecoder().decode(T.self, from: try await run(command, options + ["--json"], positional))
     }
 
-    public func config() async throws -> KConfig { try await decode(["config"]) }
-    public func openTasks() async throws -> [KTask] { try await decode(["list", "open:true"]) }
-    public func show(_ id: String) async throws -> KTask { try await decode(["show", id]) }
-    public func launch(_ id: String) async throws -> Launch { try await decode(["terminal-argv", id]) }
+    public func config() async throws -> KConfig { try await decode("config") }
+    public func openTasks() async throws -> [KTask] { try await decode("list", [], ["open:true"]) }
+    public func show(_ id: String) async throws -> KTask { try await decode("show", [], [id]) }
+    public func launch(_ id: String) async throws -> Launch { try await decode("terminal-argv", [], [id]) }
 
-    public func setStatus(_ id: String, _ status: String) async throws { try await run(["status", id, status]) }
-    public func complete(_ id: String) async throws { try await run(["complete", id]) }
-    public func postpone(_ id: String) async throws { try await run(["postpone", id]) }
-    public func reopen(_ id: String) async throws { try await run(["reopen", id]) }
+    public func setStatus(_ id: String, _ status: String) async throws { try await run("status", [], [id, status]) }
+    public func complete(_ id: String) async throws { try await run("complete", [], [id]) }
+    public func postpone(_ id: String) async throws { try await run("postpone", [], [id]) }
+    public func reopen(_ id: String) async throws { try await run("reopen", [], [id]) }
 
     /// Complete an open task, reopen a closed one. `complete` only moves to in-review under the
     /// pr-review workflow, so an in-review task is completed by status.
@@ -64,9 +62,9 @@ public struct KaramdCLI: Sendable {
 
     /// "" clears a field. Does nothing when there is nothing to change.
     public func edit(_ id: String, _ fields: [TaskEdit.Field], tags: [String]? = nil) async throws {
-        let args = Self.editArgs(id, fields, tags: tags)
-        guard args.count > 2 else { return }
-        try await run(args)
+        let options = Self.editOptions(fields, tags: tags)
+        guard !options.isEmpty else { return }
+        try await run("edit", options, [id])
     }
 
     public func edit(_ id: String, _ flag: String, _ value: String) async throws {
@@ -74,7 +72,7 @@ public struct KaramdCLI: Sendable {
     }
 
     public func create(_ title: String, phase: String?) async throws -> KTask {
-        try await decode(["create", title] + (phase.map { ["--phase", $0] } ?? []))
+        try await decode("create", phase.map { ["--phase=\($0)"] } ?? [], [title])
     }
 
     /// Config, open tasks and the Board; a failure becomes a Board with `error` set.
@@ -89,8 +87,8 @@ public struct KaramdCLI: Sendable {
         }
     }
 
-    public static func editArgs(_ id: String, _ fields: [TaskEdit.Field], tags: [String]?) -> [String] {
-        ["edit", id] + fields.flatMap { ["--\($0.flag)", $0.value] } + (tags ?? []).flatMap { ["--tag", $0] }
+    public static func editOptions(_ fields: [TaskEdit.Field], tags: [String]?) -> [String] {
+        fields.map { "--\($0.flag)=\($0.value)" } + (tags ?? []).map { "--tag=\($0)" }
     }
 
     /// Terminal args that run the agent in a login shell (an app started by launchd lacks the user's PATH),

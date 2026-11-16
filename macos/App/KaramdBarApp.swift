@@ -28,29 +28,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerLoginItem()
     }
 
-    /// Once per install location: an item the user turned off stays off, and dev builds never add one.
+    /// Once ever: an item the user turned off stays off, and dev builds outside an Applications folder never add one.
     private func registerLoginItem() {
-        let path = Bundle.main.bundlePath
-        guard path.contains("/Applications/"), UserDefaults.standard.string(forKey: "loginItemPath") != path else {
+        let key = "loginItemRegistered"
+        guard Bundle.main.bundlePath.contains("/Applications/"), !UserDefaults.standard.bool(forKey: key) else {
             return
         }
         // register() is a blocking XPC call.
         Task.detached {
             do {
                 try SMAppService.mainApp.register()
-                UserDefaults.standard.set(path, forKey: "loginItemPath")
+                UserDefaults.standard.set(true, forKey: key)
             } catch {
                 NSLog("login item: \(error)")
             }
-        }
-    }
-
-    // karamdbar://open[?id=NNN]
-    func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme == "karamdbar" {
-            let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first { $0.name == "id" }?.value
-            Overview.shared.show(select: id)
         }
     }
 }
@@ -66,6 +57,8 @@ final class Store: ObservableObject {
     @Published var actionError: String?
     private var timer: Timer?
     private var watcher: VaultWatcher?
+    private var refreshing = false
+    private var rerun = false
 
     private init() {
         Task { await refresh() }
@@ -78,14 +71,24 @@ final class Store: ObservableObject {
         }
     }
 
+    /// One refresh at a time; calls during a refresh queue one more, so results never arrive out of order.
     func refresh() async {
-        let (c, t, b) = await KaramdCLI.live.load()
-        // On failure keep the last good tasks so the overview does not go blank.
-        if b.error == nil {
-            if c != config { config = c }
-            if t != tasks { tasks = t }
+        guard !refreshing else {
+            rerun = true
+            return
         }
-        if b != board { board = b }
+        refreshing = true
+        defer { refreshing = false }
+        repeat {
+            rerun = false
+            let (c, t, b) = await KaramdCLI.live.load()
+            // On failure keep the last good tasks so the overview does not go blank.
+            if b.error == nil {
+                if c != config { config = c }
+                if t != tasks { tasks = t }
+            }
+            if b != board { board = b }
+        } while rerun
     }
 
     /// Run a write, surface its error, refresh.

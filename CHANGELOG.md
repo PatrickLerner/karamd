@@ -11,7 +11,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The macOS menu bar app KaramdBar now lives in this repo under `macos/` and
   ships with every release as `karamd-bar-macos.zip` (universal). On macOS the
   flake exposes it as `packages.karamd-bar`. The app adds itself to Login Items
-  on first launch.
+  once, on its first launch from an Applications folder.
 - A contract test (`tests/macos_contract.rs`) pins the JSON of `list`, `show`,
   `config`, `terminal-argv` and `create` that the app decodes.
 

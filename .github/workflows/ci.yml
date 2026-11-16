@@ -72,6 +72,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Toolchain versions
+        run: xcodebuild -version && swift --version && xcrun swift-format --version
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 

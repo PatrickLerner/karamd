@@ -17,12 +17,18 @@ enum Karamd {
             ?? NSHomeDirectory() + "/.nix-profile/bin/alacritty"
     }
 
-    /// App bundle next to the terminal binary (nix layout: bin/x -> Applications/X.app).
+    /// The app bundle of a Nix-installed terminal (store layout: bin/x next to Applications/X.app), so it starts
+    /// through Launch Services. Only the bundle that contains the same binary counts.
     static var terminalApp: URL? {
-        let root = URL(fileURLWithPath: terminal).resolvingSymlinksInPath()
-            .deletingLastPathComponent().deletingLastPathComponent().appending(path: "Applications")
+        let binary = URL(fileURLWithPath: terminal).resolvingSymlinksInPath()
+        guard binary.path.hasPrefix("/nix/store/") else { return nil }
+        let root = binary.deletingLastPathComponent().deletingLastPathComponent().appending(path: "Applications")
         let apps = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-        return apps.first { $0.pathExtension == "app" }
+        return apps.first {
+            $0.pathExtension == "app"
+                && FileManager.default.fileExists(
+                    atPath: $0.appending(path: "Contents/MacOS/\(binary.lastPathComponent)").path)
+        }
     }
 
     static var cleanEnv: [String: String] { KaramdCLI.cleanEnv(ProcessInfo.processInfo.environment) }

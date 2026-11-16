@@ -24,19 +24,40 @@ let utc: Calendar = {
 
 func day(_ s: String) -> Date { Day.date(s, calendar: utc)! }
 
+/// Scratch folders for one test run. The first use deletes what earlier runs left behind.
+enum Scratch {
+    private static let prefix = "karamd-bar-tests-"
+    private static let root: URL = {
+        let tmp = FileManager.default.temporaryDirectory
+        let old = (try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? []
+        for name in old where name.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: tmp.appending(path: name))
+        }
+        return tmp.appending(path: prefix + UUID().uuidString)
+    }()
+
+    static func dir() throws -> URL {
+        let url = root.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+}
+
 /// A shell script standing in for karamd: answers from the golden files and logs every call.
 struct FakeKaramd {
     let dir: URL
-    var cli: KaramdCLI { KaramdCLI(binary: dir.appending(path: "karamd").path, vault: URL(fileURLWithPath: "/vault")) }
+    let timeout: TimeInterval
 
     /// `script` runs before the canned answers, so it can override them.
-    init(_ script: String = "") throws {
-        dir = FileManager.default.temporaryDirectory.appending(path: "fake-karamd-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    init(_ script: String = "", timeout: TimeInterval = 60) throws {
+        dir = try Scratch.dir()
+        self.timeout = timeout
         let cli = Fixture.dir.appending(path: "cli").path
+        // One call per line, arguments separated by 0x1F, so argument boundaries survive.
         let body = """
             #!/bin/sh
-            echo "$*" >> "$(dirname "$0")/calls"
+            printf "%s\\037" "$@" >> "$(dirname "$0")/calls"
+            echo >> "$(dirname "$0")/calls"
             \(script)
             case "$1" in
               list) cat '\(cli)/list.json' ;;
@@ -51,8 +72,17 @@ struct FakeKaramd {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
     }
 
-    var calls: [String] {
+    var cli: KaramdCLI {
+        KaramdCLI(
+            binary: dir.appending(path: "karamd").path, vault: URL(fileURLWithPath: "/vault"), timeout: timeout)
+    }
+
+    /// Each call without the `--vault=/vault` that every call carries.
+    var calls: [[String]] {
         let text = (try? String(contentsOf: dir.appending(path: "calls"), encoding: .utf8)) ?? ""
-        return text.split(separator: "\n").map { $0.replacingOccurrences(of: " --vault /vault", with: "") }
+        return text.split(separator: "\n").map { line in
+            line.split(separator: "\u{1F}", omittingEmptySubsequences: false).dropLast().map(String.init)
+                .filter { $0 != "--vault=/vault" }
+        }
     }
 }

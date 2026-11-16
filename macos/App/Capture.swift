@@ -159,45 +159,31 @@ final class Capture: NSObject, UNUserNotificationCenterDelegate, NSTextFieldDele
 
     private func submit(_ text: String) {
         hide()
-        Task.detached {
-            let result = Capture.runClaude(text)
-            await Capture.shared.report(result)
-        }
+        Task { await report(await Self.runClaude(text)) }
     }
 
-    nonisolated private static func runClaude(_ text: String) -> CaptureRequest.Outcome {
+    nonisolated private static func runClaude(_ text: String) async -> CaptureRequest.Outcome {
         let vault = Karamd.vault
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-lc", CaptureRequest.command]
         var env = Karamd.cleanEnv
         env["KARAMD_PROMPT"] = CaptureRequest.prompt(text, vault: vault)
-        p.environment = env
-        p.currentDirectoryURL = vault
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = pipe
-
         let started = Date()
-        do { try p.run() } catch {
+        let r: ProcessResult
+        do {
+            r = try await Subprocess.run(
+                "/bin/zsh", ["-lc", CaptureRequest.command], environment: env, directory: vault, timeout: 300)
+        } catch {
             return .init(ok: false, message: "Could not start claude: \(error.localizedDescription)", id: nil)
         }
-        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 300, execute: killer)
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        killer.cancel()
-
-        let output = String(decoding: data, as: UTF8.self)
+        let output = String(decoding: r.stdout + r.stderr, as: UTF8.self)
         appendLog(
             """
-            === \(started) (\(Int(Date().timeIntervalSince(started)))s, exit \(p.terminationStatus))
+            === \(started) (\(Int(Date().timeIntervalSince(started)))s, exit \(r.status)\(r.timedOut ? ", timed out" : ""))
             > \(text)
             \(output)
 
             """)
-
-        return CaptureRequest.parse(output, exitCode: p.terminationStatus)
+        if r.timedOut { return .init(ok: false, message: "claude timed out after 5 minutes", id: nil) }
+        return CaptureRequest.parse(output, exitCode: r.status)
     }
 
     nonisolated private static func appendLog(_ s: String) {

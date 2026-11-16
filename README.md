@@ -348,11 +348,13 @@ tasks in the menu bar and on the desktop, a full overview window with an
 editor (⌥⌘O), quick capture through a headless `claude -p` (⌥⌘T), and "Open in
 Claude", which starts the `terminal-argv` session in your terminal. All reads
 and writes go through the `karamd` binary, so the app needs it installed. It
-adds itself to Login Items on first launch.
+adds itself to Login Items once, on its first launch from an Applications
+folder; if you remove it there, it stays off.
 
 Paths are set with `defaults write dev.karamd.bar <key> <path>`: `karamdPath`
 (default `/run/current-system/sw/bin/karamd`), `vaultPath` (default `~/Notes`)
-and `terminalPath` (default `~/.nix-profile/bin/alacritty`).
+and `terminalPath` (default `~/.nix-profile/bin/alacritty`). The terminal must
+accept Alacritty's `--working-directory <dir>` and `-e <command>` flags.
 
 ```
 macos/build.sh             # build into macos/build (needs Xcode + xcodegen)
@@ -360,7 +362,9 @@ macos/build.sh --install   # copy to ~/Applications and relaunch
 ```
 
 Each release attaches a universal `karamd-bar-macos.zip`; on macOS the flake
-exposes it as `packages.karamd-bar`. The app takes its version from
+exposes it as `packages.karamd-bar`. The app is only ad-hoc signed, not
+notarized: Nix installs it as is, but a zip downloaded in a browser needs
+`xattr -dr com.apple.quarantine KaramdBar.app` before macOS opens it. The app takes its version from
 `Cargo.toml`, so the CLI and the app always ship together.
 
 ## Design

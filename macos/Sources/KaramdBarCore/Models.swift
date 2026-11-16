@@ -69,6 +69,8 @@ public struct KConfig: Decodable, Hashable, Sendable {
 
     public static let empty = KConfig(today: [], phases: [])
 
+    public var phaseKeys: Set<String> { Set(phases.map(\.key)) }
+
     public func phaseName(_ key: String?) -> String? {
         phases.first { $0.key == key }?.name
     }

@@ -117,7 +117,7 @@ Split into a library crate (all logic, unit-testable) plus a thin binary:
 - macOS app: `macos/` holds KaramdBar, a SwiftUI menu bar app that drives the CLI
   (`list`/`show`/`config`/`terminal-argv`/`create` with `--json`, plus the
   write verbs). `macos/Sources/KaramdBarCore` is a SwiftPM library with all
-  UI-free logic (models, Board building, dates, the CLI client, edit plans,
+  UI-free logic (models, Board building, dates, the CLI client and its subprocess runner, edit plans,
   capture prompt/parsing) and **100% line coverage**; `macos/App` is the
   SwiftUI/AppKit layer, excluded like `web_terminal.rs`. Built with xcodegen
   (`macos/project.yml`) + `macos/build.sh`; version comes from `Cargo.toml`.

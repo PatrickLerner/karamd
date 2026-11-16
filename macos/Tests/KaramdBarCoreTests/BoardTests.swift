@@ -13,7 +13,7 @@ struct BoardTests {
     @Test func todayPhasesThenDueThenNoPhase() throws {
         let b = try board()
         #expect(b.sections.map(\.title) == ["Ongoing", "Now", "Due", "No phase"])
-        #expect(b.sections.map { $0.tasks.map(\.id) } == [["005"], ["001"], ["002"], ["003"]])
+        #expect(b.sections.map { $0.tasks.map(\.id) } == [["005"], ["001"], ["002"], ["006", "003"]])
         #expect(b.sections.map(\.phase) == ["ongoing", "now", nil, nil])
         #expect(b.sections.map(\.id) == b.sections.map(\.title))
         #expect(b.focus.map(\.id) == ["005", "001", "002"])
@@ -21,7 +21,7 @@ struct BoardTests {
         #expect(b.open == 5)
         #expect(b.stale == 1)
         #expect(b.error == nil)
-        #expect(b.total == 4)
+        #expect(b.total == 5)
     }
 
     @Test func dropsClosedTasksAndEmptySections() {

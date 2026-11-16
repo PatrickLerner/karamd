@@ -301,7 +301,7 @@ struct TaskMenu: View {
             Label("Postpone to Tomorrow", systemImage: "arrow.turn.up.right")
         }
         Button {
-            run { try await KaramdCLI.live.complete(task.id) }
+            run { try await KaramdCLI.live.toggle(task) }
         } label: {
             Label("Complete", systemImage: "checkmark.circle")
         }
@@ -582,13 +582,17 @@ struct TaskEditor: View {
         }
     }
 
-    private func save(_ t: KTask) async {
+    /// False when the edit failed.
+    @discardableResult
+    private func save(_ t: KTask) async -> Bool {
         let edit = TaskEdit.plan(from: t, title: title, tags: tags, body: text)
         await store.perform { try await KaramdCLI.live.edit(id, edit.fields, tags: edit.tags) }
-        if edit.clearsAllTags {
+        let ok = store.actionError == nil
+        if ok && edit.clearsAllTags {
             store.actionError = "karamd cannot clear all tags yet; edit the file to remove the last tag"
         }
         await load(refill: true)
+        return ok
     }
 
     private func act(_ op: @escaping () async throws -> Void) {
@@ -601,10 +605,7 @@ struct TaskEditor: View {
     /// Saves pending edits first, so ⌘↩ never drops them.
     private func toggle(_ t: KTask) {
         Task {
-            if dirty {
-                await save(t)
-                guard store.actionError == nil else { return }
-            }
+            if dirty, !(await save(t)) { return }
             await store.perform { try await KaramdCLI.live.toggle(t) }
             await load(refill: true)
         }

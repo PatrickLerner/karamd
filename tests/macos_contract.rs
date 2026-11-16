@@ -23,14 +23,23 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-fn scratch_vault(root: &Path) -> PathBuf {
+/// A copy of the fixture vault, removed on drop even when an assert fails.
+struct ScratchVault(PathBuf);
+
+impl Drop for ScratchVault {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch_vault(root: &Path) -> ScratchVault {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("karamd-contract-{}-{nanos}", std::process::id()));
     copy_dir(&root.join(FIXTURES).join("vault"), &dir);
-    dir
+    ScratchVault(dir)
 }
 
 /// Machine-specific values become placeholders.
@@ -49,6 +58,8 @@ fn normalise(mut v: Value, vault: &Path) -> Value {
 fn karamd(vault: &Path, args: &[&str]) -> Value {
     let out = Command::new(env!("CARGO_BIN_EXE_karamd"))
         .args(args)
+        // Would change the terminal-argv agent.
+        .env_remove("KARAMD_RUN_COMMAND")
         .arg("--vault")
         .arg(vault)
         .output()
@@ -64,7 +75,8 @@ fn karamd(vault: &Path, args: &[&str]) -> Value {
 #[test]
 fn macos_app_cli_contract() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let vault = scratch_vault(root);
+    let scratch = scratch_vault(root);
+    let vault = &scratch.0;
     let bless = std::env::var_os("KARAMD_BLESS").is_some();
     let cases: [(&str, &[&str]); 5] = [
         ("list", &["list", "open:true", "--json"]),
@@ -85,7 +97,7 @@ fn macos_app_cli_contract() {
         ),
     ];
     for (name, args) in cases {
-        let got = serde_json::to_string_pretty(&karamd(&vault, args)).unwrap() + "\n";
+        let got = serde_json::to_string_pretty(&karamd(vault, args)).unwrap() + "\n";
         let path = root.join(FIXTURES).join(format!("cli/{name}.json"));
         if bless {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -98,5 +110,4 @@ fn macos_app_cli_contract() {
             );
         }
     }
-    fs::remove_dir_all(vault).unwrap();
 }

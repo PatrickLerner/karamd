@@ -17,7 +17,8 @@ extension Board {
         sections.append(TaskSection(title: "Due", tasks: KTask.sorted(due, overdue: overdue)))
         let focus = sections.flatMap(\.tasks)
         let shown = Set(focus.map(\.id))
-        let unphased = open.filter { $0.phase == nil && !shown.contains($0.id) }
+        let known = config.phaseKeys
+        let unphased = open.filter { $0.isUnphased(known: known) && !shown.contains($0.id) }
         sections.append(TaskSection(title: "No phase", tasks: KTask.sorted(unphased, overdue: overdue)))
         return Board(
             focus: focus, sections: sections.filter { !$0.tasks.isEmpty }, overdue: overdue,
@@ -41,12 +42,12 @@ extension Board {
 extension TaskSection {
     /// Every configured phase in order, with "No phase" above "next" and only when it has tasks.
     public static func byPhase(tasks: [KTask], config: KConfig, overdue: Set<String>) -> [TaskSection] {
-        let known = Set(config.phases.map(\.key))
+        let known = config.phaseKeys
         var out = config.phases.map { p in
             TaskSection(
                 title: p.name, phase: p.key, tasks: KTask.sorted(tasks.filter { $0.phase == p.key }, overdue: overdue))
         }
-        let unphased = KTask.sorted(tasks.filter { $0.phase.map { !known.contains($0) } ?? true }, overdue: overdue)
+        let unphased = KTask.sorted(tasks.filter { $0.isUnphased(known: known) }, overdue: overdue)
         if !unphased.isEmpty {
             let at = config.phases.firstIndex { $0.key == "next" } ?? out.count
             out.insert(TaskSection(title: "No phase", phase: "", tasks: unphased), at: at)
@@ -62,6 +63,11 @@ extension KTask {
             (overdue.contains(t.id) ? 0 : 1, t.priorityRank, t.due ?? "9999", t.id)
         }
         return list.sorted { key($0) < key($1) }
+    }
+
+    /// No phase, or one the config does not define (removed or misspelt).
+    public func isUnphased(known: Set<String>) -> Bool {
+        phase.map { !known.contains($0) } ?? true
     }
 
     /// Case-insensitive match on title, id or any tag.
