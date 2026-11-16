@@ -6,11 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-16
+
 ### Changed
 
 - macOS quick capture tells Claude to use the `filing-tasks` skill shipped in
   `skills/`, instead of a private one. Set another with
   `defaults write dev.karamd.bar captureSkill <name>`.
+- Built with Rust 1.100.0, pinned in `rust-toolchain.toml`.
 
 ## [0.12.0] - 2026-11-16
 
