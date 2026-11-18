@@ -163,6 +163,9 @@ karamd terminal-argv 012 --agent claude  # argv for an interactive agent session
 - `create --template` knows taskmd's built-ins (`feature`, `bug`, `chore`,
   byte-matched against taskmd 0.2.5) and custom `.taskmd/templates/<name>.md`
   files (frontmatter = field defaults, body = task body).
+- `create --due` without `--phase` places the task by the reschedule rules
+  (`.taskmd.reschedule.yaml`), the same way `reschedule` would. An explicit
+  `--phase` wins; no config or no matching rule leaves it unphased.
 - `edit` sets any non-status field in place (`--title`/`--priority`/`--effort`/
   `--type`/`--phase`/`--due`/`--owner`/`--tag`/`--depends-on`/`--body`); an empty
   string clears the clearable fields, terminal timestamps are never touched, and

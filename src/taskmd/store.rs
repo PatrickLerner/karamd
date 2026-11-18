@@ -860,6 +860,23 @@ mod tests {
     }
 
     #[test]
+    fn renumber_propagates_write_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let v = vault();
+        write_task(&v, "001-a.md", "---\nid: \"001\"\ntitle: A\n---\n");
+        let task = v.scan().unwrap().tasks.remove(0);
+        fs::set_permissions(v.tasks_dir(), fs::Permissions::from_mode(0o555)).unwrap();
+        let res = v.renumber(
+            &task,
+            &mut HashSet::new(),
+            &mut FakeEntropy::new(0, vec![0]),
+        );
+        fs::set_permissions(v.tasks_dir(), fs::Permissions::from_mode(0o755)).ok();
+        assert!(res.unwrap_err().to_string().contains("creating"));
+        assert!(v.tasks_dir().join("001-a.md").exists());
+    }
+
+    #[test]
     fn renumber_without_path_errors() {
         let v = vault();
         let task = Task::new("001", "A", day(2026, 7, 1));

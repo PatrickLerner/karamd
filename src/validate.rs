@@ -6,7 +6,7 @@
 //! `created_at`, off-convention filename). Exit codes match taskmd: 0 clean,
 //! 1 errors, 2 warnings under `--strict`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -231,7 +231,7 @@ pub fn validate(root: &Path) -> Result<Report> {
 }
 
 /// One task moved off a duplicated id by [`fix_duplicate_ids`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Renumbered {
     pub from: String,
     pub to: String,
@@ -247,14 +247,12 @@ pub fn fix_duplicate_ids(root: &Path, entropy: &mut dyn Entropy) -> Result<Vec<R
     let vault = Vault::open(root)?;
     let scan = vault.scan()?;
     let mut taken: HashSet<String> = scan.tasks.iter().map(|t| t.id()).collect();
-    let mut by_id: HashMap<String, Vec<&Task>> = HashMap::new();
+    let mut by_id: BTreeMap<String, Vec<&Task>> = BTreeMap::new();
     for task in &scan.tasks {
         by_id.entry(task.id()).or_default().push(task);
     }
-    let mut groups: Vec<Vec<&Task>> = by_id.into_values().filter(|g| g.len() > 1).collect();
-    groups.sort_by_key(|g| g[0].id());
     let mut out = Vec::new();
-    for mut group in groups {
+    for mut group in by_id.into_values().filter(|g| g.len() > 1) {
         group.sort_by_key(|t| (t.created_at(), t.rel_path.clone()));
         for task in &group[1..] {
             let moved = vault.renumber(task, &mut taken, entropy)?;

@@ -56,9 +56,8 @@ impl std::fmt::Display for DuplicateOpenTitle {
 impl std::error::Error for DuplicateOpenTitle {}
 
 /// Validate the `due` field's `YYYY-MM-DD` shape before any file is written.
-fn check_due(due: &str) -> Result<()> {
+fn check_due(due: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(due, "%Y-%m-%d")
-        .map(|_| ())
         .with_context(|| format!("invalid due `{due}` (need YYYY-MM-DD)"))
 }
 
@@ -116,11 +115,23 @@ pub fn create(
         .as_deref()
         .map(|name| template::resolve(root, name))
         .transpose()?;
-    if let Some(due) = spec.due.as_deref().filter(|d| !d.is_empty()) {
-        check_due(due)?;
-    }
+    let due = spec
+        .due
+        .as_deref()
+        .filter(|d| !d.is_empty())
+        .map(check_due)
+        .transpose()?;
 
     let vault = Vault::open(root)?;
+
+    // No explicit phase: the reschedule rules place the task by its due date.
+    let auto_phase = match (due, &spec.phase) {
+        (Some(due), None) => {
+            let config = root.join(crate::reschedule::DEFAULT_RESCHEDULE_CONFIG);
+            crate::reschedule::phase_for_due(&vault, &config, due, today)?
+        }
+        _ => None,
+    };
 
     // A single scan feeds both the duplicate-title guard and the dependency
     // check below (skip it when neither needs it).
@@ -152,7 +163,7 @@ pub fn create(
         if let Some(tt) = task_type {
             t.set_task_type(tt);
         }
-        if let Some(phase) = &spec.phase {
+        if let Some(phase) = spec.phase.as_deref().or(auto_phase.as_deref()) {
             t.set_phase(Some(phase));
         }
         if let Some(due) = spec.due.as_deref().filter(|d| !d.is_empty()) {
@@ -593,6 +604,74 @@ mod tests {
         assert!(raw.contains("priority: critical"));
         assert!(raw.contains("due: 2026-08-01"));
         assert!(raw.contains("dependencies:"));
+    }
+
+    #[test]
+    fn create_phases_by_due_unless_phase_given() {
+        let root = tempdir();
+        fs::write(
+            root.join(".taskmd.yaml"),
+            "phases:\n  - { id: now, name: Now }\n  - { id: next, name: Next }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".taskmd.reschedule.yaml"),
+            "rules:\n  - { due: today, phase: now }\n  - { due: this_week, phase: next }\n",
+        )
+        .unwrap();
+        let today = day(2026, 11, 18); // Wednesday
+        let due = |title: &str, due: &str, phase: Option<&str>| CreateSpec {
+            title: title.into(),
+            due: Some(due.into()),
+            phase: phase.map(Into::into),
+            ..CreateSpec::default()
+        };
+        let v = create(
+            &root,
+            &due("A", "2026-11-18", None),
+            today,
+            &mut FixedEntropy,
+        )
+        .unwrap();
+        assert_eq!(v.phase.as_deref(), Some("now"));
+        let v = create(
+            &root,
+            &due("B", "2026-11-20", None),
+            today,
+            &mut FixedEntropy,
+        )
+        .unwrap();
+        assert_eq!(v.phase.as_deref(), Some("next"));
+        // No matching rule: unphased.
+        let v = create(
+            &root,
+            &due("C", "2027-01-20", None),
+            today,
+            &mut FixedEntropy,
+        )
+        .unwrap();
+        assert_eq!(v.phase, None);
+        // An explicit phase wins over the rules.
+        let v = create(
+            &root,
+            &due("D", "2026-11-18", Some("next")),
+            today,
+            &mut FixedEntropy,
+        )
+        .unwrap();
+        assert_eq!(v.phase.as_deref(), Some("next"));
+        // A broken rules file fails loudly before anything is written.
+        fs::write(root.join(".taskmd.reschedule.yaml"), "rules: [\n").unwrap();
+        assert!(
+            create(
+                &root,
+                &due("E", "2026-11-18", None),
+                today,
+                &mut FixedEntropy
+            )
+            .is_err()
+        );
+        assert!(!root.join("tasks/005-e.md").exists());
     }
 
     #[test]

@@ -299,6 +299,18 @@ pub fn postpone(task: &mut Task, today: NaiveDate, rules: &[RescheduleRule]) {
     }
 }
 
+/// The phase the rules at `config_path` pick for a task due on `due`. `None`
+/// when the config is missing or disabled, or no rule matches.
+pub fn phase_for_due(
+    vault: &Vault,
+    config_path: &Path,
+    due: NaiveDate,
+    today: NaiveDate,
+) -> Result<Option<String>> {
+    let (_, rules) = load_active_rules(vault, config_path)?;
+    Ok(decide(due, today, &rules).map(str::to_string))
+}
+
 /// [`postpone`] task `id` in the vault, using the rules at `config_path`
 /// (missing or disabled config: only `due` changes).
 pub fn postpone_task(

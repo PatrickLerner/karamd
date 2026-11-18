@@ -12,6 +12,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `karamd validate --fix` renumbers tasks with duplicate ids. The oldest keeps
   the id; the others move to the next free id and a matching filename.
+- `create --due` without `--phase` sets the phase from the reschedule rules,
+  so a new task lands where `reschedule` would put it.
 
 ## [0.12.1] - 2026-11-16
 
