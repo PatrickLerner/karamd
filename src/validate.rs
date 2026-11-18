@@ -6,14 +6,14 @@
 //! `created_at`, off-convention filename). Exit codes match taskmd: 0 clean,
 //! 1 errors, 2 warnings under `--strict`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use crate::taskmd::{Effort, Graph, GraphIssue, Priority, Status, Task, TaskType, Vault};
+use crate::taskmd::{Effort, Entropy, Graph, GraphIssue, Priority, Status, Task, TaskType, Vault};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -230,6 +230,45 @@ pub fn validate(root: &Path) -> Result<Report> {
     })
 }
 
+/// One task moved off a duplicated id by [`fix_duplicate_ids`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Renumbered {
+    pub from: String,
+    pub to: String,
+    pub old_file: String,
+    pub new_file: String,
+}
+
+/// Resolve duplicate ids. Per id, the oldest task (`created_at`, then path)
+/// keeps it; every other one gets a fresh id and a matching filename.
+/// References (`dependencies`, `parent`) are left alone, so they resolve to
+/// the keeper.
+pub fn fix_duplicate_ids(root: &Path, entropy: &mut dyn Entropy) -> Result<Vec<Renumbered>> {
+    let vault = Vault::open(root)?;
+    let scan = vault.scan()?;
+    let mut taken: HashSet<String> = scan.tasks.iter().map(|t| t.id()).collect();
+    let mut by_id: HashMap<String, Vec<&Task>> = HashMap::new();
+    for task in &scan.tasks {
+        by_id.entry(task.id()).or_default().push(task);
+    }
+    let mut groups: Vec<Vec<&Task>> = by_id.into_values().filter(|g| g.len() > 1).collect();
+    groups.sort_by_key(|g| g[0].id());
+    let mut out = Vec::new();
+    for mut group in groups {
+        group.sort_by_key(|t| (t.created_at(), t.rel_path.clone()));
+        for task in &group[1..] {
+            let moved = vault.renumber(task, &mut taken, entropy)?;
+            out.push(Renumbered {
+                from: task.id(),
+                to: moved.id(),
+                old_file: file_of(task).unwrap_or_default(),
+                new_file: file_of(&moved).unwrap_or_default(),
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Human rendering: one line per finding plus a summary.
 pub fn render_human(report: &Report) -> String {
     let mut out = String::new();
@@ -387,6 +426,58 @@ mod tests {
         assert!(errs[0].contains("001-a.md"));
         assert!(errs[0].contains("001-b.md"));
         assert!(errs[1].contains("002-c.md"));
+    }
+
+    #[test]
+    fn fix_duplicate_ids_keeps_oldest_and_renumbers_the_rest() {
+        let root = tempdir();
+        write(
+            &root,
+            "001-new.md",
+            "---\nid: \"001\"\ntitle: New\ncreated_at: 2026-07-02\n---\n",
+        );
+        write(
+            &root,
+            "001-old.md",
+            "---\nid: \"001\"\ntitle: Old\ncreated_at: 2026-07-01\n---\n",
+        );
+        write(
+            &root,
+            "001-same-day.md",
+            "---\nid: \"001\"\ntitle: Same day\ncreated_at: 2026-07-02\n---\n",
+        );
+        write(
+            &root,
+            "002-dep.md",
+            "---\nid: \"002\"\ntitle: Dep\ndependencies: [\"001\"]\ncreated_at: 2026-07-01\n---\n",
+        );
+        let moved = fix_duplicate_ids(&root, &mut crate::taskmd::SystemEntropy::default()).unwrap();
+        assert_eq!(
+            moved,
+            vec![
+                Renumbered {
+                    from: "001".into(),
+                    to: "003".into(),
+                    old_file: "001-new.md".into(),
+                    new_file: "003-new.md".into(),
+                },
+                Renumbered {
+                    from: "001".into(),
+                    to: "004".into(),
+                    old_file: "001-same-day.md".into(),
+                    new_file: "004-same-day.md".into(),
+                },
+            ]
+        );
+        let r = validate(&root).unwrap();
+        assert!(r.findings.is_empty(), "{:?}", r.findings);
+        assert!(root.join("tasks/001-old.md").exists());
+        // Idempotent: nothing left to fix.
+        assert!(
+            fix_duplicate_ids(&root, &mut crate::taskmd::SystemEntropy::default())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

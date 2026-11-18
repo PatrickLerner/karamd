@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-18
+
+### Added
+
+- `karamd validate --fix` renumbers tasks with duplicate ids. The oldest keeps
+  the id; the others move to the next free id and a matching filename.
+
 ## [0.12.1] - 2026-11-16
 
 ### Changed

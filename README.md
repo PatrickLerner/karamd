@@ -207,7 +207,7 @@ shape for diffing.
 ### Validate
 
 ```
-karamd validate [--strict] [--json|--yaml]
+karamd validate [--strict] [--fix] [--json|--yaml]
 ```
 
 Lints the vault against the taskmd spec. **Errors** (exit 1): malformed
@@ -219,6 +219,11 @@ naming an unconfigured scope (both only checked when configured), missing
 `created_at`, and filenames off the `ID-slug.md` convention. Non-task files
 (READMEs, spec docs, templates, fenced yaml examples) are never flagged. This
 repo's CI validates its own `tasks/` with `karamd validate --strict`.
+
+`--fix` first renumbers tasks that share an id: the oldest (`created_at`, then
+path) keeps it, the others get the next free id and a matching filename.
+References stay with the keeper. Each move is printed to stderr. Safe to run
+unattended.
 
 ### Search, graph, stats
 

@@ -245,12 +245,52 @@ impl Vault {
         let dir = self.tasks_dir();
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let mut taken: HashSet<String> = self.scan()?.tasks.iter().map(|t| t.id()).collect();
-        for _ in 0..16 {
-            let id = self.allocate_id(&taken, entropy);
-            let mut task = Task::new(&id, title, today);
+        self.write_fresh(Path::new(""), title, &mut taken, entropy, &|id| {
+            let mut task = Task::new(id, title, today);
             build(&mut task);
-            let filename = format!("{id}-{}.md", slugify(title));
-            let path = dir.join(&filename);
+            task
+        })
+    }
+
+    /// Move a task to a fresh id: write `<id>-<slug>.md` next to the old file,
+    /// then remove the old one. Used to resolve duplicate ids; ids handed out
+    /// are added to `taken`.
+    pub fn renumber(
+        &self,
+        task: &Task,
+        taken: &mut HashSet<String>,
+        entropy: &mut dyn Entropy,
+    ) -> Result<Task> {
+        let rel = task.rel_path.as_ref().context("task has no file path")?;
+        let rel_dir = rel.parent().unwrap_or(Path::new(""));
+        let moved = self.write_fresh(rel_dir, &task.title(), taken, entropy, &|id| {
+            let mut t = task.clone();
+            t.set("id", id.into());
+            t
+        })?;
+        let old = self.tasks_dir().join(rel);
+        fs::remove_file(&old).with_context(|| format!("removing {}", old.display()))?;
+        Ok(moved)
+    }
+
+    /// Allocate an id and write `make(id)` as `<rel_dir>/<id>-<slug>.md`,
+    /// reserving the filename with `create_new` (never clobber). A taken
+    /// filename (concurrent writer, or a non-task file) burns the id and
+    /// retries, bounded.
+    fn write_fresh(
+        &self,
+        rel_dir: &Path,
+        title: &str,
+        taken: &mut HashSet<String>,
+        entropy: &mut dyn Entropy,
+        make: &dyn Fn(&str) -> Task,
+    ) -> Result<Task> {
+        for _ in 0..16 {
+            let id = self.allocate_id(taken, entropy);
+            taken.insert(id.clone());
+            let mut task = make(&id);
+            let rel = rel_dir.join(format!("{id}-{}.md", slugify(title)));
+            let path = self.tasks_dir().join(&rel);
             match fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -260,15 +300,10 @@ impl Vault {
                     // Plain `?`: a write failure on a just-created fd carries
                     // enough context in the io error itself.
                     f.write_all(task.to_markdown().as_bytes())?;
-                    task.rel_path = Some(PathBuf::from(filename));
+                    task.rel_path = Some(rel);
                     return Ok(task);
                 }
-                // The filename exists (a concurrent writer won the id, or a
-                // non-task file occupies it): burn the id and try the next.
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    taken.insert(id);
-                    continue;
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => {
                     return Err(e).with_context(|| format!("creating {}", path.display()));
                 }
@@ -799,6 +834,58 @@ mod tests {
         .unwrap();
         let on_disk = fs::read_to_string(v.tasks_dir().join("web/001-a.md")).unwrap();
         assert!(on_disk.contains("owner: p"));
+    }
+
+    #[test]
+    fn renumber_moves_task_to_fresh_id_in_same_dir() {
+        let v = vault();
+        write_task(
+            &v,
+            "work/005-a.md",
+            "---\nid: \"005\"\ntitle: A thing\nfoo: kept\n---\n\nbody\n",
+        );
+        let task = v.scan().unwrap().tasks.remove(0);
+        let mut taken: HashSet<String> = ["005".to_string()].into();
+        let moved = v
+            .renumber(&task, &mut taken, &mut FakeEntropy::new(0, vec![0]))
+            .unwrap();
+        assert_eq!(moved.id(), "006");
+        assert_eq!(moved.rel_path, Some(PathBuf::from("work/006-a-thing.md")));
+        assert!(taken.contains("006"));
+        assert!(!v.tasks_dir().join("work/005-a.md").exists());
+        let text = fs::read_to_string(v.tasks_dir().join("work/006-a-thing.md")).unwrap();
+        assert!(text.contains("id: '006'") || text.contains("id: \"006\""));
+        assert!(text.contains("foo: kept"));
+        assert!(text.contains("body"));
+    }
+
+    #[test]
+    fn renumber_without_path_errors() {
+        let v = vault();
+        let task = Task::new("001", "A", day(2026, 7, 1));
+        let err = v
+            .renumber(
+                &task,
+                &mut HashSet::new(),
+                &mut FakeEntropy::new(0, vec![0]),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("no file path"));
+    }
+
+    #[test]
+    fn renumber_errors_when_old_file_vanished() {
+        let v = vault();
+        let mut task = Task::new("001", "A", day(2026, 7, 1));
+        task.rel_path = Some(PathBuf::from("001-gone.md"));
+        let err = v
+            .renumber(
+                &task,
+                &mut HashSet::new(),
+                &mut FakeEntropy::new(0, vec![0]),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("removing"));
     }
 
     #[test]

@@ -86,7 +86,7 @@ emit taskmd's recommendation shape for diffing.
 ### validate
 
 ```
-karamd validate [--strict] [--json|--yaml]
+karamd validate [--strict] [--fix] [--json|--yaml]
 ```
 
 Lints the vault against the taskmd spec. **Errors** (exit 1): malformed
@@ -95,6 +95,11 @@ dependencies on nonexistent tasks, dependency cycles, parent defects. **Warnings
 (exit 0, or 2 under `--strict` for CI gating): a `phase` outside configured
 phases, `touches` naming an unconfigured scope, missing `created_at`, filenames
 off the `ID-slug.md` convention. Non-task files are never flagged.
+
+`--fix` first renumbers tasks that share an id: the oldest (`created_at`, then
+path) keeps it, the others get the next free id and a matching filename.
+References stay with the keeper. Each move is printed to stderr. Safe to run
+unattended.
 
 ### web
 

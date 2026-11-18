@@ -342,6 +342,10 @@ enum Commands {
         /// Treat warnings as failures (exit code 2).
         #[arg(long)]
         strict: bool,
+        /// Renumber tasks with duplicate ids before checking (the oldest
+        /// keeps the id).
+        #[arg(long)]
+        fix: bool,
         #[command(flatten)]
         format: FormatArgs,
     },
@@ -979,8 +983,18 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
         Commands::Validate {
             vault,
             strict,
+            fix,
             format,
         } => {
+            if fix {
+                let mut entropy = taskmd::SystemEntropy::default();
+                for m in validate::fix_duplicate_ids(&vault.vault, &mut entropy)? {
+                    eprintln!(
+                        "renumbered {} -> {}: {} -> {}",
+                        m.from, m.to, m.old_file, m.new_file
+                    );
+                }
+            }
             let report = validate::validate(&vault.vault)?;
             match format.format() {
                 Format::Human => println!("{}", validate::render_human(&report)),
@@ -2521,8 +2535,21 @@ mod tests {
         .unwrap();
         assert_eq!(run_in(&vault, &["validate"]).unwrap(), ExitCode::from(1));
 
+        // --fix renumbers a duplicate id; the bad enum still fails.
+        fs::write(
+            vault.join("tasks/001-dup.md"),
+            "---\nid: \"001\"\ntitle: Dup\ncreated_at: 2026-07-02\n---\n",
+        )
+        .unwrap();
+        assert_eq!(
+            run_in(&vault, &["validate", "--fix"]).unwrap(),
+            ExitCode::from(1)
+        );
+        assert!(vault.join("tasks/004-dup.md").exists());
+
         // Vault open failure is an error, not an exit code.
         fs::write(vault.join(".taskmd.yaml"), "dir: [broken\n").unwrap();
         assert!(run_in(&vault, &["validate"]).is_err());
+        assert!(run_in(&vault, &["validate", "--fix"]).is_err());
     }
 }
