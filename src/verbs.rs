@@ -223,7 +223,7 @@ impl EditSpec {
 /// existence are checked up front (loud errors, nothing written); the mutation
 /// itself goes through the defensive re-reading store. Status is not editable
 /// here — transitions go through [`set_status`]/[`complete`].
-pub fn edit(root: &Path, id: &str, spec: &EditSpec) -> Result<TaskView> {
+pub fn edit(root: &Path, id: &str, spec: &EditSpec, today: NaiveDate) -> Result<TaskView> {
     if let Some(title) = &spec.title
         && title.trim().is_empty()
     {
@@ -244,11 +244,20 @@ pub fn edit(root: &Path, id: &str, spec: &EditSpec) -> Result<TaskView> {
         .as_deref()
         .map(|t| TaskType::parse(t).with_context(|| format!("invalid type `{t}`")))
         .transpose()?;
-    if let Some(Some(due)) = &spec.due {
-        check_due(due)?;
-    }
+    let new_due = match &spec.due {
+        Some(Some(due)) => Some(check_due(due)?),
+        _ => None,
+    };
 
     let vault = Vault::open(root)?;
+
+    let due_phase = match new_due {
+        Some(due) => {
+            let config = root.join(crate::reschedule::DEFAULT_RESCHEDULE_CONFIG);
+            crate::reschedule::phase_for_due(&vault, &config, due, today)?
+        }
+        None => None,
+    };
 
     if let Some(deps) = &spec.dependencies
         && !deps.is_empty()
@@ -277,7 +286,19 @@ pub fn edit(root: &Path, id: &str, spec: &EditSpec) -> Result<TaskView> {
         if let Some(tt) = task_type {
             t.set_task_type(tt);
         }
-        if let Some(phase) = &spec.phase {
+        // A moved due date re-phases the task unless the same edit also moves
+        // the phase. Form clients resend the unchanged phase, so compare.
+        let due_moved = new_due.is_some() && new_due != t.due();
+        let phase_moved = spec
+            .phase
+            .as_ref()
+            .is_some_and(|p| p.as_deref() != t.phase().as_deref());
+        if due_moved
+            && !phase_moved
+            && let Some(target) = &due_phase
+        {
+            t.set_phase(Some(target));
+        } else if let Some(phase) = &spec.phase {
             t.set_phase(phase.as_deref());
         }
         if let Some(owner) = &spec.owner {
@@ -549,6 +570,59 @@ mod tests {
         let v = create(&root, &spec("Timed"), day(2026, 7, 2), &mut FixedEntropy).unwrap();
         assert_eq!(v.id.len(), 6); // default length
         assert!(root.join(format!("tasks/{}-timed.md", v.id)).exists());
+    }
+
+    #[test]
+    fn edit_rephases_on_due_change_unless_phase_moved() {
+        let root = tempdir();
+        fs::write(
+            root.join(".taskmd.yaml"),
+            "phases:\n  - { id: now, name: Now }\n  - { id: next, name: Next }\n  - { id: soon, name: Soon }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".taskmd.reschedule.yaml"),
+            "rules:\n  - { due: today, phase: now }\n  - { due: this_week, phase: next }\n  - { due: next_week, phase: soon }\n",
+        )
+        .unwrap();
+        let today = day(2026, 11, 18); // Wednesday
+        let spec = CreateSpec {
+            title: "A".into(),
+            due: Some("2026-11-20".into()),
+            ..CreateSpec::default()
+        };
+        let id = create(&root, &spec, today, &mut FixedEntropy).unwrap().id;
+        let edit_with = |due: Option<Option<&str>>, phase: Option<Option<&str>>| {
+            let s = EditSpec {
+                due: due.map(|d| d.map(Into::into)),
+                phase: phase.map(|p| p.map(Into::into)),
+                ..EditSpec::default()
+            };
+            edit(&root, &id, &s, today).unwrap().phase
+        };
+
+        // Due alone moves the phase.
+        assert_eq!(
+            edit_with(Some(Some("2026-11-25")), None).as_deref(),
+            Some("soon")
+        );
+        // Form resend: unchanged phase alongside a new due still re-phases.
+        assert_eq!(
+            edit_with(Some(Some("2026-11-18")), Some(Some("soon"))).as_deref(),
+            Some("now")
+        );
+        // A phase change in the same edit wins.
+        assert_eq!(
+            edit_with(Some(Some("2026-11-25")), Some(Some("next"))).as_deref(),
+            Some("next")
+        );
+        // Same due resent: phase untouched.
+        assert_eq!(
+            edit_with(Some(Some("2026-11-25")), None).as_deref(),
+            Some("next")
+        );
+        // Clearing due keeps the phase.
+        assert_eq!(edit_with(Some(None), None).as_deref(), Some("next"));
     }
 
     #[test]
@@ -931,7 +1005,7 @@ mod tests {
             dependencies: Some(vec!["001".into()]),
             body: Some("new body".into()),
         };
-        let v = edit(&root, "002", &spec).unwrap();
+        let v = edit(&root, "002", &spec, day(2026, 1, 1)).unwrap();
         assert_eq!(v.title, "New title");
         assert_eq!(v.priority, "high");
         assert_eq!(v.effort.as_deref(), Some("small"));
@@ -952,6 +1026,7 @@ mod tests {
                 due: Some(None),
                 ..EditSpec::default()
             },
+            day(2026, 1, 1),
         )
         .unwrap();
         assert_eq!(cleared.due, None);
@@ -962,6 +1037,7 @@ mod tests {
                 due: Some(Some("nope".into())),
                 ..EditSpec::default()
             },
+            day(2026, 1, 1),
         )
         .unwrap_err();
         assert!(err.to_string().contains("invalid due `nope`"));
@@ -1014,6 +1090,7 @@ mod tests {
                 priority: Some("high".into()),
                 ..EditSpec::default()
             },
+            day(2026, 1, 1),
         )
         .unwrap();
         let raw = fs::read_to_string(&path).unwrap();
@@ -1035,7 +1112,7 @@ mod tests {
             "001-a.md",
             "---\nid: \"001\"\ntitle: Keep\nstatus: pending\nphase: v1\nrecurring: \"k\"\n---\n\n# Keep\n\nbody\n",
         );
-        let v = edit(&root, "001", &EditSpec::default()).unwrap();
+        let v = edit(&root, "001", &EditSpec::default(), day(2026, 1, 1)).unwrap();
         assert_eq!(v.title, "Keep");
         assert_eq!(v.phase.as_deref(), Some("v1"));
         let raw = fs::read_to_string(root.join("tasks/001-a.md")).unwrap();
@@ -1096,7 +1173,7 @@ mod tests {
             ),
         ];
         for (s, needle) in cases {
-            let err = edit(&root, "001", &s).unwrap_err();
+            let err = edit(&root, "001", &s, day(2026, 1, 1)).unwrap_err();
             assert!(
                 err.to_string().contains(needle),
                 "expected `{needle}` in `{err}`"
@@ -1110,7 +1187,7 @@ mod tests {
     #[test]
     fn edit_missing_task_errors() {
         let root = tempdir();
-        assert!(edit(&root, "404", &EditSpec::default()).is_err());
+        assert!(edit(&root, "404", &EditSpec::default(), day(2026, 1, 1)).is_err());
     }
 
     #[test]

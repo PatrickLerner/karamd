@@ -59,6 +59,8 @@ karamd web
 - `create --due` without `--phase` places the task by the reschedule rules
   (`.taskmd.reschedule.yaml`), the same way `reschedule` would. An explicit
   `--phase` wins; no config or no matching rule leaves it unphased.
+- `edit --due` re-phases the same way. A phase change in the same edit wins;
+  resending the current phase does not count. Clearing `due` keeps the phase.
 - `create --template` knows taskmd's built-ins (`feature`, `bug`, `chore`) and
   custom `.taskmd/templates/<name>.md` files. The configured id strategy
   (`sequential`, `prefixed`, `random`, `ulid`) is honored at create time.

@@ -791,7 +791,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
             if spec.is_empty() {
                 anyhow::bail!("edit: nothing to change (pass at least one field flag)");
             }
-            let view = verbs::edit(&vault.vault, &id, &spec)?;
+            let view = verbs::edit(&vault.vault, &id, &spec, Local::now().date_naive())?;
             let human = format!("karamd: edited {}", view.id);
             print_task(format.format(), &view, human)?;
             Ok(ExitCode::SUCCESS)

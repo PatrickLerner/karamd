@@ -458,6 +458,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (path === "/config" && method === "GET") return json(config);
   // No ongoing karamd run executions in the mock (#046).
   if (path === "/runs" && method === "GET") return json([]);
+  if (path === "/phase-for-due" && method === "GET") return json({ phase: null });
   if (path === "/next" && method === "GET") {
     return json(nextUp(Number(url.searchParams.get("limit") ?? 5)));
   }

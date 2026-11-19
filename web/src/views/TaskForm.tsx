@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   useMutation,
   useQuery,
@@ -34,6 +34,7 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
   const [type, setType] = useState("");
   const [phase, setPhase] = useState("");
   const [due, setDue] = useState("");
+  const latestDue = useRef("");
   const [tags, setTags] = useState("");
   const [dependencies, setDependencies] = useState("");
   const [body, setBody] = useState("");
@@ -79,6 +80,20 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
     onError: (err: unknown) => setError(errorMessage(err)),
   });
   const busy = mutation.isPending;
+
+  // Move the phase select to where the reschedule rules put the new date.
+  // The ref drops answers for a date the user has already moved past.
+  function onDueChange(value: string) {
+    setDue(value);
+    latestDue.current = value;
+    if (value === "") return;
+    api
+      .phaseForDue(value)
+      .then(({ phase }) => {
+        if (phase !== null && latestDue.current === value) setPhase(phase);
+      })
+      .catch(() => undefined);
+  }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -186,7 +201,7 @@ export function TaskForm({ id, tab }: { id?: string; tab: string }) {
           <input
             type="date"
             value={due}
-            onChange={(e) => setDue(e.target.value)}
+            onChange={(e) => onDueChange(e.target.value)}
           />
         </label>
         <label>

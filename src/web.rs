@@ -346,7 +346,7 @@ async fn patch_task(
         dependencies: body.dependencies,
         body: body.body,
     };
-    let view = verbs::edit(&state.root, &id, &spec)?;
+    let view = verbs::edit(&state.root, &id, &spec, Local::now().date_naive())?;
     Ok(Json(DetailOut::from(&view)).into_response())
 }
 
@@ -386,6 +386,29 @@ async fn postpone_task(
     let mut view = verbs::show(&state.root, &id)?;
     clear_stale_run(&mut view, vault.config.run.timeout_secs);
     Ok(Json(DetailOut::from(&view)).into_response())
+}
+
+#[derive(Deserialize)]
+struct PhaseForDueParams {
+    due: String,
+}
+
+/// GET /api/phase-for-due?due=YYYY-MM-DD — the phase the reschedule rules pick,
+/// so the edit form can move its phase select as the due date changes.
+async fn phase_for_due(
+    State(state): State<AppState>,
+    Query(params): Query<PhaseForDueParams>,
+) -> std::result::Result<Response, ApiError> {
+    let due = chrono::NaiveDate::parse_from_str(&params.due, "%Y-%m-%d")
+        .with_context(|| format!("invalid due `{}` (need YYYY-MM-DD)", params.due))?;
+    let vault = Vault::open(&state.root)?;
+    let phase = crate::reschedule::phase_for_due(
+        &vault,
+        &state.root.join(crate::DEFAULT_RESCHEDULE_CONFIG),
+        due,
+        Local::now().date_naive(),
+    )?;
+    Ok(Json(serde_json::json!({ "phase": phase })).into_response())
 }
 
 /// Cap on the per-run log tail returned to the web log view (#046).
@@ -636,6 +659,7 @@ fn app(root: PathBuf, web_dir: PathBuf, run_command: String) -> Router {
         .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/config", get(get_config))
         .route("/api/next", get(next_tasks))
+        .route("/api/phase-for-due", get(phase_for_due))
         .route("/api/rules", get(get_rules).put(put_rules))
         .route("/api/rules/preview", post(preview_rules))
         .fallback_service(static_router)
@@ -1017,6 +1041,44 @@ mod tests {
         let req = json_req("POST", "/api/tasks/404/postpone", serde_json::json!({}));
         let (status, _) = call(&root, req).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn due_edit_moves_phase_and_preview_matches() {
+        let root = tempdir();
+        fs::write(
+            root.join(".taskmd.yaml"),
+            "dir: tasks\nphases:\n  - { id: now, name: Now }\n  - { id: soon, name: Soon }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".taskmd.reschedule.yaml"),
+            "rules:\n  - { min_days: 1, phase: soon }\n",
+        )
+        .unwrap();
+        write_task(
+            &root,
+            "001-a.md",
+            "---\nid: \"001\"\ntitle: T\nstatus: pending\nphase: now\n---\n\n# T\n",
+        );
+        let future = "2099-01-01";
+
+        let (status, body) = call(&root, get(&format!("/api/phase-for-due?due={future}"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["phase"], "soon");
+
+        // The edit form resends the unchanged phase with the new due.
+        let req = json_req(
+            "PATCH",
+            "/api/tasks/001",
+            serde_json::json!({ "due": future, "phase": "now" }),
+        );
+        let (status, body) = call(&root, req).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["phase"], "soon");
+
+        let (status, _) = call(&root, get("/api/phase-for-due?due=nope")).await;
+        assert!(status.is_client_error());
     }
 
     #[tokio::test]

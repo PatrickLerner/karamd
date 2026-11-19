@@ -166,6 +166,8 @@ karamd terminal-argv 012 --agent claude  # argv for an interactive agent session
 - `create --due` without `--phase` places the task by the reschedule rules
   (`.taskmd.reschedule.yaml`), the same way `reschedule` would. An explicit
   `--phase` wins; no config or no matching rule leaves it unphased.
+- `edit --due` re-phases the same way. A phase change in the same edit wins;
+  resending the current phase does not count. Clearing `due` keeps the phase.
 - `edit` sets any non-status field in place (`--title`/`--priority`/`--effort`/
   `--type`/`--phase`/`--due`/`--owner`/`--tag`/`--depends-on`/`--body`); an empty
   string clears the clearable fields, terminal timestamps are never touched, and

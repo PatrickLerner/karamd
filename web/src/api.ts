@@ -71,6 +71,8 @@ export const api = {
       jsonInit("POST", {}),
     ),
   config: (): Promise<Config> => request("/config"),
+  phaseForDue: (due: string): Promise<{ phase: string | null }> =>
+    request(`/phase-for-due?due=${encodeURIComponent(due)}`),
   next: (limit = 5): Promise<NextItem[]> => request(`/next?limit=${limit}`),
   rules: (): Promise<RulesResponse> => request("/rules"),
   putRules: (rules: Rule[]): Promise<RulesResponse> =>

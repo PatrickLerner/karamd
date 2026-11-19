@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `edit --due` re-phases the task by the reschedule rules in the same write,
+  like `create --due`. A phase change in the same edit wins; resending the
+  current phase does not count as one. Clearing `due` keeps the phase.
+- Web: `GET /api/phase-for-due?due=YYYY-MM-DD` returns the phase the rules
+  pick. The edit form uses it to move the phase select as the due date
+  changes, and saving a new due date moves the phase.
+
 ## [0.13.0] - 2026-11-18
 
 ### Added
