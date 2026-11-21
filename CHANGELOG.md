@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-21
+
+### Added
+
+- macOS app: when an error mentions `validate`, the banner offers "Run validate
+  --fix". A failed CLI call now shows stdout too, so validate's report is
+  visible.
+
+### Changed
+
+- macOS app: "open session" opens a window in the running Alacritty over its
+  IPC socket instead of a second instance. No extra Dock icon, and the main
+  app's permission grants apply. With no Alacritty running it starts
+  `/Applications/Nix Apps/Alacritty.app` (override with `terminalAppPath`).
+
 ## [0.14.0] - 2026-11-19
 
 ### Added
