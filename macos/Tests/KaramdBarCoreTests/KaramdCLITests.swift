@@ -24,6 +24,7 @@ struct KaramdCLITests {
         try await cli.setStatus("1", "blocked")
         try await cli.complete("1")
         try await cli.postpone("1")
+        try await cli.validateFix()
         try await cli.toggle(KTask(id: "2", title: ""))
         try await cli.toggle(KTask(id: "3", title: "", status: "completed"))
         try await cli.toggle(KTask(id: "4", title: "", status: "in-review"))
@@ -34,10 +35,23 @@ struct KaramdCLITests {
         #expect(
             fake.calls == [
                 ["status", "--", "1", "blocked"], ["complete", "--", "1"], ["postpone", "--", "1"],
-                ["complete", "--", "2"], ["reopen", "--", "3"], ["status", "--", "4", "completed"],
+                ["validate", "--fix", "--"], ["complete", "--", "2"], ["reopen", "--", "3"],
+                ["status", "--", "4", "completed"],
                 ["edit", "--phase=", "--", "1"], ["create", "--phase=now", "--json", "--", "Buy milk"],
                 ["create", "--json", "--", "-x"],
             ])
+    }
+
+    @Test func suggestsValidate() {
+        #expect(KaramdCLI.suggestsValidate("id `001` is ambiguous: 2 files carry it (run validate)"))
+        #expect(!KaramdCLI.suggestsValidate("no task with id `9`"))
+    }
+
+    @Test func failureShowsStdoutToo() async throws {
+        await #expect(throws: CLIError("renumbered\n1 error(s)")) {
+            let fake = try FakeKaramd("echo renumbered >&2; echo ' 1 error(s)'; exit 1")
+            try await fake.cli.validateFix()
+        }
     }
 
     @Test func editOptions() {
@@ -99,6 +113,12 @@ struct KaramdCLITests {
         let args = KaramdCLI.terminalArgs(Launch(argv: ["claude", "go"], cwd: "/v"))
         #expect(args.prefix(4) == ["--working-directory", "/v", "-e", "/bin/zsh"])
         #expect(args.suffix(3) == ["karamd", "claude", "go"])
+    }
+
+    @Test func createWindowArgs() {
+        #expect(
+            KaramdCLI.createWindowArgs(socket: "/t/a.sock", ["-e", "x"])
+                == ["msg", "--socket", "/t/a.sock", "create-window", "-e", "x"])
     }
 
     @Test func cleanEnvDropsClaudeMarkers() {

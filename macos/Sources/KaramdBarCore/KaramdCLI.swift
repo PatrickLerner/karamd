@@ -26,7 +26,10 @@ public struct KaramdCLI: Sendable {
         }
         if r.timedOut { throw CLIError("karamd \(command) timed out after \(Int(timeout)) s") }
         guard r.status == 0 else {
-            let msg = String(decoding: r.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            // validate prints its report to stdout.
+            let msg = [r.stderr, r.stdout]
+                .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }.joined(separator: "\n")
             throw CLIError(msg.isEmpty ? "karamd exited \(r.status)" : msg)
         }
         return r.stdout
@@ -47,6 +50,12 @@ public struct KaramdCLI: Sendable {
     public func complete(_ id: String) async throws { try await run("complete", [], [id]) }
     public func postpone(_ id: String) async throws { try await run("postpone", [], [id]) }
     public func reopen(_ id: String) async throws { try await run("reopen", [], [id]) }
+
+    /// Renumbers duplicate ids. Any defect left fails the call with the report.
+    public func validateFix() async throws { try await run("validate", ["--fix"]) }
+
+    /// The error tells the user to run `validate`.
+    public static func suggestsValidate(_ message: String) -> Bool { message.contains("validate") }
 
     /// Complete an open task, reopen a closed one. `complete` only moves to in-review under the
     /// pr-review workflow, so an in-review task is completed by status.
@@ -95,6 +104,11 @@ public struct KaramdCLI: Sendable {
     /// without Claude session markers from our own environment.
     public static func terminalArgs(_ l: Launch) -> [String] {
         ["--working-directory", l.cwd, "-e", "/bin/zsh", "-lc", #"unset -m "CLAUDE*"; exec "$@""#, "karamd"] + l.argv
+    }
+
+    /// Args for `alacritty msg`, which opens the window in the running instance behind `socket`.
+    public static func createWindowArgs(socket: String, _ terminalArgs: [String]) -> [String] {
+        ["msg", "--socket", socket, "create-window"] + terminalArgs
     }
 
     /// The environment without Claude session markers inherited from a parent session.

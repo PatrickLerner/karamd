@@ -204,6 +204,11 @@ struct OverviewView: View {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 Text(e).font(.callout).lineLimit(3).textSelection(.enabled)
                 Spacer(minLength: 8)
+                if KaramdCLI.suggestsValidate(e) {
+                    Button("Run validate --fix") {
+                        Task { await store.perform { try await KaramdCLI.live.validateFix() } }
+                    }
+                }
                 Button {
                     store.actionError = nil
                 } label: {
