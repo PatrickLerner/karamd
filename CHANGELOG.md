@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-26
+
+### Fixed
+
+- macOS app: the desktop task list moves back to the top-left of the primary
+  screen when displays change (monitor plugged in or removed, primary screen
+  switched).
+
 ## [0.15.0] - 2026-11-21
 
 ### Added

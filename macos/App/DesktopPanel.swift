@@ -41,8 +41,7 @@ final class DesktopPanel {
         backdrop.addSubview(host)
         panel.contentView = backdrop
 
-        let screen = NSScreen.screens.first?.visibleFrame ?? .zero
-        panel.setFrameTopLeftPoint(NSPoint(x: screen.minX + 40, y: screen.maxY - 30))
+        place()
         panel.orderFront(nil)
         updateBackdrop()
 
@@ -55,6 +54,21 @@ final class DesktopPanel {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.updateBackdrop() } }
+        nc.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.place()
+                self?.updateBackdrop()
+            }
+        }
+    }
+
+    /// Top-left of the primary screen (the one with the menu bar). Rerun when displays
+    /// change, else the panel keeps the old screen's coordinates.
+    private func place() {
+        let screen = NSScreen.screens.first?.visibleFrame ?? .zero
+        panel.setFrameTopLeftPoint(NSPoint(x: screen.minX + 40, y: screen.maxY - 30))
     }
 
     private let backdrop = NSView()
