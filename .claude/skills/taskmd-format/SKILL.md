@@ -5,8 +5,8 @@ description: The taskmd task-file format — frontmatter fields, enum values, ID
 
 # taskmd file format
 
-Authoritative source: `taskmd spec --stdout` (spec v1.2, taskmd 0.2.5). If taskmd
-is upgraded, regenerate and reconcile this skill. karamd's job is to emit files
+Pinned to spec v1.2 (taskmd 0.2.5). This skill and karamd are the reference;
+the taskmd binary is not needed. karamd's job is to emit files
 that match this format exactly.
 
 Each task is one `.md` file: YAML frontmatter between `---` delimiters, then a

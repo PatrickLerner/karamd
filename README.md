@@ -38,8 +38,7 @@ local skill and stays in place; the plugin copy under `skills/` is the
 published one.
 
 **Keep the skills in sync**: the skill content is derived from this repo's code
-and the taskmd spec. When the taskmd spec version changes (regenerate with
-`taskmd spec --stdout`) or karamd's CLI surface changes, update the matching
+and the taskmd spec. When karamd's spec handling or CLI surface changes, update the matching
 `skills/<name>/SKILL.md` in the same change.
 
 ### opencode
@@ -194,7 +193,7 @@ karamd next [--limit N] [--quick-wins] [--critical] [--phase P] [--strict-phases
 ```
 
 A faithful port of taskmd's `next` algorithm (verified score-for-score against
-the 0.2.5 binary; `scripts/next-parity.sh` re-checks it). Only *actionable*
+the 0.2.5 binary). Only *actionable*
 tasks are recommended: explicitly `pending` or `in-progress`, every dependency
 `completed` (a `cancelled` dependency blocks forever — it never completes),
 and no unresolved children. Scoring: priority base (40/30/20/10) +

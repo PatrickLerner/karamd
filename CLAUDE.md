@@ -35,9 +35,9 @@ general taskmd tool: task verbs, query, ranked next, validate, web UI
   `create_new` for new files, re-read before mutate, id allocation at write
   time).
 - **Compatibility contract:** karamd's CLI surface may differ from taskmd's, but
-  every file written must match the taskmd spec (1.2, taskmd 0.2.5; regenerate
-  with `taskmd spec --stdout`). Unknown frontmatter fields are preserved
-  verbatim; CRLF tolerated.
+  every file written must match the taskmd spec, pinned at 1.2 (taskmd 0.2.5)
+  and hard-coded here; the taskmd binary is not a dependency. Unknown
+  frontmatter fields are preserved verbatim; CRLF tolerated.
 
 ## Layout
 
@@ -217,13 +217,11 @@ dropped ("prüfen" → "pr-fen"). Covered by a unit test — keep it green.
 
 ## This repo's own tasks
 
-Managed with taskmd in `tasks/` (MCP via the `taskmd-mcp` plugin, enabled in
-`.claude/settings.json`). Prefer the taskmd MCP tools. Fill task templates fully.
+Managed with karamd in `tasks/`. Fill task templates fully.
 
 Never hand-write or hand-edit task `.md` files with an editor. Create and modify
-them through the CLI tool — `taskmd add` / `taskmd set` (and `karamd` once it can,
-per #011/#015) — so files are always spec-valid. Run `taskmd validate` after
-changes.
+them with `karamd create` / `karamd edit` so files are always spec-valid. Run
+`karamd validate` after changes.
 
 Any follow-up or bug found mid-work that is not fixed immediately becomes its own
 taskmd task in `tasks/` (don't leave it only in a commit message, a code comment,

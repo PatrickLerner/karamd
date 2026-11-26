@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- The taskmd binary is no longer a dev dependency: dropped
+  `scripts/next-parity.sh` and the taskmd Claude plugins. The spec is pinned at
+  1.2 (taskmd 0.2.5).
+
 ## [0.15.1] - 2026-11-26
 
 ### Fixed
